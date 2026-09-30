@@ -1,0 +1,41 @@
+name: dont_miss
+description: "A modern, clean reminder app to ensure you never miss an important task or deadline."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+  flutter: ">=3.10.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  provider: ^6.1.2
+
+  # Local persistence
+  shared_preferences: ^2.2.2
+
+  # Notifications and exact alarms
+  flutter_local_notifications: ^17.1.2
+  timezone: ^0.9.3
+  flutter_timezone: ^5.1.0
+
+  # Formatting dates and times
+  intl: ^0.19.0
+
+  # URL launcher for optional task links
+  url_launcher: ^6.2.6
+
+  # Unique identifier generation
+  uuid: ^4.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
