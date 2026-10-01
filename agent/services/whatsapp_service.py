@@ -36,18 +36,27 @@ class BaseWhatsAppService(ABC):
         pass
 
 
+_UNSET = object()
+
+
 class TwilioWhatsAppService(BaseWhatsAppService):
     """Twilio WhatsApp API provider."""
 
     def __init__(
         self,
-        account_sid: Optional[str] = None,
-        auth_token: Optional[str] = None,
-        from_number: Optional[str] = None,
+        account_sid: Any = _UNSET,
+        auth_token: Any = _UNSET,
+        from_number: Any = _UNSET,
     ):
-        self.account_sid = account_sid or os.environ.get("TWILIO_ACCOUNT_SID")
-        self.auth_token = auth_token or os.environ.get("TWILIO_AUTH_TOKEN")
-        self.from_number = from_number or os.environ.get("TWILIO_WHATSAPP_NUMBER")
+        self.account_sid = os.environ.get("TWILIO_ACCOUNT_SID") if account_sid is _UNSET else account_sid
+        self.auth_token = os.environ.get("TWILIO_AUTH_TOKEN") if auth_token is _UNSET else auth_token
+        if from_number is _UNSET:
+            self.from_number = (
+                os.environ.get("TWILIO_WHATSAPP_FROM")
+                or os.environ.get("TWILIO_WHATSAPP_NUMBER")
+            )
+        else:
+            self.from_number = from_number
 
     @property
     def is_configured(self) -> bool:

@@ -35,6 +35,7 @@ class User(Base):
     reminders = relationship("Reminder", back_populates="user", cascade="all, delete-orphan")
     verifications = relationship("PhoneVerification", back_populates="user", cascade="all, delete-orphan")
     action_logs = relationship("ActionHistory", back_populates="user")
+    pending_confirmations = relationship("PendingWhatsAppConfirmation", back_populates="user", cascade="all, delete-orphan")
 
 class Reminder(Base):
     __tablename__ = "reminders"
@@ -95,3 +96,16 @@ class ActionHistory(Base):
 
     user = relationship("User", back_populates="action_logs")
     reminder = relationship("Reminder", back_populates="action_logs")
+
+class PendingWhatsAppConfirmation(Base):
+    __tablename__ = "pending_whatsapp_confirmations"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    phone_number = Column(String(32), nullable=False, index=True)
+    proposed_draft = Column(Text, nullable=False)
+    status = Column(String(32), default="PENDING", nullable=False)  # 'PENDING', 'CONFIRMED', 'CANCELLED', 'EXPIRED'
+    created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+    user = relationship("User", back_populates="pending_confirmations")

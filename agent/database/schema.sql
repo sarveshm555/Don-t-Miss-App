@@ -77,3 +77,18 @@ CREATE TABLE IF NOT EXISTS action_history (
 
 CREATE INDEX IF NOT EXISTS idx_action_history_user_id ON action_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_action_history_reminder_id ON action_history(reminder_id);
+
+-- 6. PENDING WHATSAPP CONFIRMATIONS TABLE
+CREATE TABLE IF NOT EXISTS pending_whatsapp_confirmations (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    phone_number VARCHAR(32) NOT NULL,
+    proposed_draft TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user_id ON pending_whatsapp_confirmations(user_id);
+CREATE INDEX IF NOT EXISTS idx_pending_confirmations_phone ON pending_whatsapp_confirmations(phone_number);
+CREATE INDEX IF NOT EXISTS idx_pending_confirmations_status ON pending_whatsapp_confirmations(status);
