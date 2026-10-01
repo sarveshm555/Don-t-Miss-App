@@ -18,6 +18,7 @@ class AddEditTaskScreen extends StatefulWidget {
   final Task? initialDraft;
   final AiReminderDraft? initialAiDraft;
   final ActionDispatchService? actionDispatchService;
+  final NotificationService? notificationService;
 
   const AddEditTaskScreen({
     super.key,
@@ -25,6 +26,7 @@ class AddEditTaskScreen extends StatefulWidget {
     this.initialDraft,
     this.initialAiDraft,
     this.actionDispatchService,
+    this.notificationService,
   });
 
   @override
@@ -43,6 +45,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
   late Priority _selectedPriority;
   late Recurrence _selectedRecurrence;
   late bool _isNotificationEnabled;
+  late bool _isWhatsAppEnabled;
 
   bool _isSaving = false;
 
@@ -68,6 +71,12 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
     _selectedPriority = task?.priority ?? Priority.medium;
     _selectedRecurrence = task?.recurrence ?? Recurrence.none;
     _isNotificationEnabled = task?.isNotificationEnabled ?? true;
+
+    final initialChannels = widget.taskToEdit?.channels ??
+        widget.initialDraft?.channels ??
+        widget.initialAiDraft?.channels ??
+        const ['local', 'whatsapp'];
+    _isWhatsAppEnabled = initialChannels.contains('whatsapp');
   }
 
   @override
@@ -154,10 +163,16 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
 
       // Check if notification permission is granted if user requested notification
       if (_isNotificationEnabled) {
-        await NotificationService.instance.requestPermissions();
+        final notif = widget.notificationService ?? NotificationService.instance;
+        await notif.requestPermissions();
       }
 
       if (!mounted) return;
+
+      final activeChannels = <String>[];
+      if (_isNotificationEnabled) activeChannels.add('local');
+      if (_isWhatsAppEnabled) activeChannels.add('whatsapp');
+      if (activeChannels.isEmpty) activeChannels.add('local');
 
       if (_isEditing) {
         final updatedTask = widget.taskToEdit!.copyWith(
@@ -169,6 +184,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
           priority: _selectedPriority,
           recurrence: _selectedRecurrence,
           url: url,
+          channels: activeChannels,
           isNotificationEnabled: _isNotificationEnabled,
         );
         await taskProvider.updateTask(updatedTask);
@@ -196,9 +212,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
         priority: _selectedPriority,
         recurrence: _selectedRecurrence,
         url: url,
-        channels: widget.initialAiDraft?.channels ??
-            widget.initialDraft?.channels ??
-            const ['local', 'whatsapp'],
+        channels: activeChannels,
         isNotificationEnabled: _isNotificationEnabled,
         isCompleted: false,
         createdAt: DateTime.now(),
@@ -218,6 +232,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
                 priority: _selectedPriority,
                 recurrence: _selectedRecurrence,
                 url: url,
+                channels: activeChannels,
               )
             : AiReminderDraft(
                 title: title,
@@ -228,7 +243,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
                 priority: _selectedPriority,
                 recurrence: _selectedRecurrence,
                 url: url,
-                channels: widget.initialDraft?.channels ?? const ['local', 'whatsapp'],
+                channels: activeChannels,
                 rawPrompt: title,
               );
 
@@ -237,6 +252,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
 
         cloudSuccess = await dispatchService.dispatchConfirmedAction(
           draft: confirmedDraft,
+          reminderId: newTask.id,
           userId: currentUser?.id,
           userPhoneNumber: currentUser?.phoneNumber,
           authToken: authToken,
@@ -296,7 +312,14 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
         );
       }
 
-      Navigator.of(context).pop();
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -596,7 +619,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
               ),
               const SizedBox(height: 24),
 
-              // Notification ON/OFF Toggle
+              // Local Notification Toggle
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -635,7 +658,7 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Reminder Notification',
+                            'Local Notification',
                             style: TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 15,
@@ -662,6 +685,80 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
                       onChanged: (val) {
                         setState(() {
                           _isNotificationEnabled = val;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // WhatsApp Notification Toggle
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: isDark ? AppColors.surfaceDark : Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: isDark
+                        ? AppColors.borderDark
+                        : AppColors.borderLight,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _isWhatsAppEnabled
+                            ? const Color(0xFF25D366).withValues(alpha: 0.15)
+                            : Colors.grey.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        _isWhatsAppEnabled
+                            ? Icons.chat_bubble_rounded
+                            : Icons.chat_bubble_outline_rounded,
+                        color: _isWhatsAppEnabled
+                            ? const Color(0xFF25D366)
+                            : Colors.grey,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'WhatsApp Reminder',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _isWhatsAppEnabled
+                                ? 'Message delivered to your verified WhatsApp'
+                                : 'WhatsApp reminder is turned off',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark
+                                  ? AppColors.textSecondaryDark
+                                  : AppColors.textSecondaryLight,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch.adaptive(
+                      value: _isWhatsAppEnabled,
+                      activeTrackColor: const Color(0xFF25D366),
+                      onChanged: (val) {
+                        setState(() {
+                          _isWhatsAppEnabled = val;
                         });
                       },
                     ),
