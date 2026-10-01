@@ -1,4 +1,5 @@
 import os
+import uuid
 import logging
 from datetime import datetime, date, timezone
 from fastapi import FastAPI, HTTPException, Depends
@@ -11,9 +12,15 @@ from agent.models.reminder_schema import (
 )
 from agent.reminder_agent import ReminderAgent
 from agent.services.action_router import ActionRouter
-from agent.database.connection import check_db_connectivity, get_db_session
+from agent.database.connection import check_db_connectivity, get_db_session, init_db
 from agent.database.models import User, Reminder, ReminderChannel, ActionHistory
 from agent.routes.auth_routes import auth_router
+from agent.routes.reminder_routes import reminder_router
+from agent.routes.twilio_routes import twilio_router
+from agent.services.reminder_persistence import (
+    parse_due_date,
+    persist_confirmed_reminder_to_db,
+)
 from contextlib import asynccontextmanager
 from agent.services.jwt_service import (
     get_current_user_optional,
@@ -21,13 +28,22 @@ from agent.services.jwt_service import (
     get_jwt_secret,
 )
 
+from agent.services.reminder_scheduler import get_reminder_scheduler
+
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Ensure required environment variables are set before accepting requests."""
     get_jwt_secret()
+    try:
+        init_db()
+    except Exception as e:
+        logger.warning(f"Could not auto-initialize DB tables on startup: {e}")
+    scheduler = get_reminder_scheduler()
+    scheduler.start()
     yield
+    await scheduler.stop()
 
 app = FastAPI(
     title="Don't Miss AI Assistant Backend",
@@ -37,6 +53,8 @@ app = FastAPI(
 )
 
 app.include_router(auth_router)
+app.include_router(reminder_router)
+app.include_router(twilio_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,111 +67,8 @@ app.add_middleware(
 agent = ReminderAgent()
 action_router = ActionRouter()
 
-def parse_due_date(due_date_str: str | None) -> date | None:
-    """Safely parse an incoming dueDate string into a Python date.
-
-    Supports:
-    - YYYY-MM-DD
-    - YYYY-MM-DDTHH:MM:SS
-    - YYYY-MM-DDTHH:MM:SS.mmm
-    - ISO strings ending with Z or UTC offsets
-    """
-    if not due_date_str or not due_date_str.strip():
-        return None
-    clean_str = due_date_str.strip()
-    if clean_str.endswith("Z") or clean_str.endswith("z"):
-        clean_str = clean_str[:-1] + "+00:00"
-    try:
-        return datetime.fromisoformat(clean_str).date()
-    except (ValueError, TypeError):
-        pass
-    try:
-        return date.fromisoformat(clean_str)
-    except (ValueError, TypeError):
-        pass
-    try:
-        return date.fromisoformat(clean_str.split("T")[0].split(" ")[0])
-    except Exception:
-        return None
-
-def _persist_confirmed_reminder_to_db(
-    draft,
-    user_phone_number: str | None,
-    channels_dispatched: list[str],
-    user_id: str | None = None,
-) -> str | None:
-    """Persist a human-confirmed reminder and record audit history in PostgreSQL.
-    
-    This function is strictly called AFTER human confirmation, never during proposal generation.
-    """
-    try:
-        session = next(get_db_session())
-        try:
-            # 1. Ensure user exists (by user_id, phone, or default guest user)
-            user = None
-            if user_id:
-                user = session.query(User).filter_by(id=user_id).first()
-            if not user and user_phone_number:
-                user = session.query(User).filter_by(phone_number=user_phone_number).first()
-            if not user:
-                user = session.query(User).filter_by(email="guest@dontmiss.app").first()
-            if not user:
-                user = User(
-                    email="guest@dontmiss.app",
-                    password_hash="system_guest_account",
-                    full_name="Guest User",
-                    phone_number=user_phone_number,
-                )
-                session.add(user)
-                session.commit()
-
-            # 2. Parse due date safely across ISO 8601 date and datetime formats
-            due_d = parse_due_date(draft.dueDate)
-
-            # 3. Create reminder record with status CONFIRMED
-            reminder = Reminder(
-                user_id=user.id,
-                title=draft.title,
-                description=draft.description,
-                due_date=due_d,
-                due_hour=draft.dueHour,
-                due_minute=draft.dueMinute,
-                priority=draft.priority or "medium",
-                recurrence=draft.recurrence or "none",
-                url=draft.url,
-                status="CONFIRMED",
-                raw_prompt=draft.title,
-            )
-            session.add(reminder)
-            session.commit()
-
-            # 4. Create reminder channels
-            for ch in (draft.channels or ["local"]):
-                ch_status = "DISPATCHED" if ch in channels_dispatched else "PENDING"
-                channel_record = ReminderChannel(
-                    reminder_id=reminder.id,
-                    channel=ch,
-                    status=ch_status,
-                    dispatched_at=datetime.now(timezone.utc) if ch_status == "DISPATCHED" else None,
-                )
-                session.add(channel_record)
-
-            # 5. Create action history record
-            history = ActionHistory(
-                user_id=user.id,
-                reminder_id=reminder.id,
-                action_type="CONFIRM_REMINDER",
-                details=f"Channels: {channels_dispatched}",
-                success=True,
-            )
-            session.add(history)
-            session.commit()
-            return reminder.id
-        finally:
-            session.close()
-    except Exception as e:
-        logger.warning(f"Could not persist confirmed reminder to database: {e}")
-        return None
+# Alias for backward compatibility
+_persist_confirmed_reminder_to_db = persist_confirmed_reminder_to_db
 
 @app.get("/health")
 def health_check():
@@ -200,11 +115,12 @@ async def confirm_and_route_action(
     channels_dispatched = result.get("channels_dispatched", [])
     
     # Persist strictly after confirmation
-    _persist_confirmed_reminder_to_db(
+    persisted_reminder_id = _persist_confirmed_reminder_to_db(
         draft=request.draft,
         user_phone_number=effective_phone,
         channels_dispatched=channels_dispatched,
         user_id=effective_user_id,
+        reminder_id=request.reminder_id,
     )
 
     return ActionConfirmResponse(
@@ -212,6 +128,7 @@ async def confirm_and_route_action(
         status=result.get("status", "ROUTED"),
         channels_dispatched=channels_dispatched,
         message=f"Action processed for channels: {', '.join(channels_dispatched)}",
+        reminder_id=persisted_reminder_id,
     )
 
 if __name__ == "__main__":
