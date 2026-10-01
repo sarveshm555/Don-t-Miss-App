@@ -224,7 +224,7 @@ void main() {
   });
 }
 
-class _MockAuthTransport implements AgentHttpTransport {
+class _MockAuthTransport extends AgentHttpTransport {
   final AgentHttpResponse Function(
     Uri uri,
     Map<String, dynamic> payload,
