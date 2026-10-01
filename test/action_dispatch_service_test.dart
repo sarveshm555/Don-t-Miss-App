@@ -124,7 +124,7 @@ void main() {
   });
 }
 
-class _MockActionTransport implements AgentHttpTransport {
+class _MockActionTransport extends AgentHttpTransport {
   final int statusCode;
   final String body;
   int invokedCount = 0;
@@ -148,7 +148,7 @@ class _MockActionTransport implements AgentHttpTransport {
   }
 }
 
-class _MockThrowingTransport implements AgentHttpTransport {
+class _MockThrowingTransport extends AgentHttpTransport {
   @override
   Future<AgentHttpResponse> postJson({
     required Uri uri,
