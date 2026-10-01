@@ -134,6 +134,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
 
     final cloudSuccess = await dispatchService.dispatchConfirmedAction(
       draft: draft,
+      reminderId: task.id,
       userId: currentUser?.id,
       userPhoneNumber: currentUser?.phoneNumber,
       authToken: authToken,
