@@ -138,6 +138,7 @@ class _MockActionTransport implements AgentHttpTransport {
     required Uri uri,
     required Map<String, dynamic> payload,
     required Duration timeout,
+    Map<String, String>? headers,
     dynamic clientFactory,
   }) async {
     invokedCount++;
@@ -153,6 +154,7 @@ class _MockThrowingTransport implements AgentHttpTransport {
     required Uri uri,
     required Map<String, dynamic> payload,
     required Duration timeout,
+    Map<String, String>? headers,
     dynamic clientFactory,
   }) async {
     throw Exception('Connection refused: Backend unreachable');

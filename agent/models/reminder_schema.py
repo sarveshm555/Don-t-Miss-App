@@ -35,6 +35,7 @@ class ActionConfirmRequest(BaseModel):
     action: Literal["confirm_reminder"] = "confirm_reminder"
     draft: ReminderDraft
     user_phone_number: Optional[str] = Field(None, description="Optional user WhatsApp number for external notification")
+    user_id: Optional[str] = Field(None, description="Optional authenticated user ID for database persistence")
 
 class ActionConfirmResponse(BaseModel):
     success: bool

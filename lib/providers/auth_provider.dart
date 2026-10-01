@@ -11,7 +11,7 @@ class AuthProvider extends ChangeNotifier {
   String? _errorMessage;
 
   AuthProvider({AuthService? authService})
-      : _authService = authService ?? LocalAuthService() {
+      : _authService = authService ?? ApiAuthService() {
     loadUser();
   }
 
@@ -20,6 +20,9 @@ class AuthProvider extends ChangeNotifier {
   bool get isVerified => _currentUser?.isVerified ?? false;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+  String? get token => _authService is ApiAuthService
+      ? (_authService as ApiAuthService).currentToken
+      : null;
 
   Future<void> loadUser() async {
     _isLoading = true;

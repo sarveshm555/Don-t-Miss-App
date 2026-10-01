@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, date, timezone
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from agent.models.reminder_schema import (
     AgentRequest,
@@ -13,14 +13,30 @@ from agent.reminder_agent import ReminderAgent
 from agent.services.action_router import ActionRouter
 from agent.database.connection import check_db_connectivity, get_db_session
 from agent.database.models import User, Reminder, ReminderChannel, ActionHistory
+from agent.routes.auth_routes import auth_router
+from contextlib import asynccontextmanager
+from agent.services.jwt_service import (
+    get_current_user_optional,
+    get_current_user_required,
+    get_jwt_secret,
+)
 
 logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Ensure required environment variables are set before accepting requests."""
+    get_jwt_secret()
+    yield
 
 app = FastAPI(
     title="Don't Miss AI Assistant Backend",
     description="OpenAI API powered production backend for natural language reminder extraction with human confirmation, Supabase PostgreSQL persistence, and WhatsApp action routing",
-    version="2.2.0",
+    version="2.3.0",
+    lifespan=lifespan,
 )
+
+app.include_router(auth_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,7 +76,12 @@ def parse_due_date(due_date_str: str | None) -> date | None:
     except Exception:
         return None
 
-def _persist_confirmed_reminder_to_db(draft, user_phone_number: str | None, channels_dispatched: list[str]) -> str | None:
+def _persist_confirmed_reminder_to_db(
+    draft,
+    user_phone_number: str | None,
+    channels_dispatched: list[str],
+    user_id: str | None = None,
+) -> str | None:
     """Persist a human-confirmed reminder and record audit history in PostgreSQL.
     
     This function is strictly called AFTER human confirmation, never during proposal generation.
@@ -68,9 +89,11 @@ def _persist_confirmed_reminder_to_db(draft, user_phone_number: str | None, chan
     try:
         session = next(get_db_session())
         try:
-            # 1. Ensure user exists (find by phone or default guest user)
+            # 1. Ensure user exists (by user_id, phone, or default guest user)
             user = None
-            if user_phone_number:
+            if user_id:
+                user = session.query(User).filter_by(id=user_id).first()
+            if not user and user_phone_number:
                 user = session.query(User).filter_by(phone_number=user_phone_number).first()
             if not user:
                 user = session.query(User).filter_by(email="guest@dontmiss.app").first()
@@ -144,7 +167,10 @@ def health_check():
     }
 
 @app.post("/agent/reminder", response_model=AgentResponse)
-async def create_reminder_proposal(request: AgentRequest):
+async def create_reminder_proposal(
+    request: AgentRequest,
+    current_user: User | None = Depends(get_current_user_optional),
+):
     if not request.prompt or not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
     
@@ -156,13 +182,19 @@ async def create_reminder_proposal(request: AgentRequest):
     return response
 
 @app.post("/action/confirm", response_model=ActionConfirmResponse)
-async def confirm_and_route_action(request: ActionConfirmRequest):
+async def confirm_and_route_action(
+    request: ActionConfirmRequest,
+    current_user: User | None = Depends(get_current_user_optional),
+):
     """Action Router endpoint: routes human-confirmed reminders to Android local notifications
     and/or WhatsApp via Twilio, and persists confirmed reminders to PostgreSQL.
     """
+    effective_user_id = current_user.id if current_user else request.user_id
+    effective_phone = request.user_phone_number or (current_user.phone_number if current_user else None)
+
     result = await action_router.route_confirmed_action(
         draft=request.draft,
-        user_phone_number=request.user_phone_number,
+        user_phone_number=effective_phone,
     )
 
     channels_dispatched = result.get("channels_dispatched", [])
@@ -170,8 +202,9 @@ async def confirm_and_route_action(request: ActionConfirmRequest):
     # Persist strictly after confirmation
     _persist_confirmed_reminder_to_db(
         draft=request.draft,
-        user_phone_number=request.user_phone_number,
+        user_phone_number=effective_phone,
         channels_dispatched=channels_dispatched,
+        user_id=effective_user_id,
     )
 
     return ActionConfirmResponse(

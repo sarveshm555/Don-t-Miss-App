@@ -7,6 +7,7 @@ import '../models/ai_reminder_draft.dart';
 import '../models/priority.dart';
 import '../models/recurrence.dart';
 import '../models/task.dart';
+import '../providers/auth_provider.dart';
 import '../providers/task_provider.dart';
 import '../services/action_dispatch_service.dart';
 import '../services/notification_service.dart';
@@ -138,6 +139,14 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
     });
 
     try {
+      final taskProvider = Provider.of<TaskProvider>(context, listen: false);
+      AuthProvider? auth;
+      try {
+        auth = Provider.of<AuthProvider>(context, listen: false);
+      } catch (_) {}
+      final currentUser = auth?.currentUser;
+      final authToken = auth?.token;
+
       final title = _titleController.text.trim();
       final description = _descriptionController.text.trim();
       final rawUrl = _urlController.text.trim();
@@ -149,8 +158,6 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
       }
 
       if (!mounted) return;
-
-      final taskProvider = Provider.of<TaskProvider>(context, listen: false);
 
       if (_isEditing) {
         final updatedTask = widget.taskToEdit!.copyWith(
@@ -227,8 +234,13 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
 
         final dispatchService = widget.actionDispatchService ??
             const BackendActionDispatchService();
-        cloudSuccess =
-            await dispatchService.dispatchConfirmedAction(draft: confirmedDraft);
+
+        cloudSuccess = await dispatchService.dispatchConfirmedAction(
+          draft: confirmedDraft,
+          userId: currentUser?.id,
+          userPhoneNumber: currentUser?.phoneNumber,
+          authToken: authToken,
+        );
       }
 
       if (!mounted) return;

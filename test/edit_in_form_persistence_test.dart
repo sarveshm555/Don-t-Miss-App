@@ -57,6 +57,8 @@ class FakeActionDispatchService implements ActionDispatchService {
   Future<bool> dispatchConfirmedAction({
     required AiReminderDraft draft,
     String? userPhoneNumber,
+    String? userId,
+    String? authToken,
   }) async {
     dispatchCount++;
     lastDispatchedDraft = draft;

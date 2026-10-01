@@ -11,6 +11,8 @@ abstract class ActionDispatchService {
   Future<bool> dispatchConfirmedAction({
     required AiReminderDraft draft,
     String? userPhoneNumber,
+    String? userId,
+    String? authToken,
   });
 }
 
@@ -35,12 +37,20 @@ class BackendActionDispatchService implements ActionDispatchService {
   Future<bool> dispatchConfirmedAction({
     required AiReminderDraft draft,
     String? userPhoneNumber,
+    String? userId,
+    String? authToken,
   }) async {
     final payload = {
       'action': 'confirm_reminder',
       'draft': draft.toJson(),
       'user_phone_number': userPhoneNumber,
+      if (userId != null) 'user_id': userId,
     };
+
+    final headers = <String, String>{};
+    if (authToken != null && authToken.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $authToken';
+    }
 
     final uri = Uri.parse('$effectiveBaseUrl/action/confirm');
 
@@ -49,6 +59,7 @@ class BackendActionDispatchService implements ActionDispatchService {
         uri: uri,
         payload: payload,
         timeout: const Duration(seconds: 15),
+        headers: headers,
       );
 
       if (response.statusCode == 200) {

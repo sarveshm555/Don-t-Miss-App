@@ -4,6 +4,7 @@ import '../core/constants/app_colors.dart';
 import '../core/utils/date_time_utils.dart';
 import '../models/ai_reminder_draft.dart';
 import '../models/recurrence.dart';
+import '../providers/auth_provider.dart';
 import '../providers/task_provider.dart';
 import '../screens/add_edit_task_screen.dart';
 import '../services/action_dispatch_service.dart';
@@ -116,14 +117,27 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     final task = draft.toTask();
     final provider = Provider.of<TaskProvider>(context, listen: false);
 
+    AuthProvider? auth;
+    try {
+      auth = Provider.of<AuthProvider>(context, listen: false);
+    } catch (_) {}
+
+    final currentUser = auth?.currentUser;
+    final authToken = auth?.token;
+
     // 1. Local persistence and notification scheduling
     await provider.addTask(task);
 
     // 2. Cloud persistence and external action routing for all confirmed AI reminders
     final dispatchService = widget.actionDispatchService ??
         const BackendActionDispatchService();
-    final cloudSuccess =
-        await dispatchService.dispatchConfirmedAction(draft: draft);
+
+    final cloudSuccess = await dispatchService.dispatchConfirmedAction(
+      draft: draft,
+      userId: currentUser?.id,
+      userPhoneNumber: currentUser?.phoneNumber,
+      authToken: authToken,
+    );
 
     if (!mounted) return;
     Navigator.of(context).pop();

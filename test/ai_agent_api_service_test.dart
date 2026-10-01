@@ -244,6 +244,7 @@ class _MockAgentHttpTransport implements AgentHttpTransport {
     required Uri uri,
     required Map<String, dynamic> payload,
     required Duration timeout,
+    Map<String, String>? headers,
     dynamic clientFactory,
   }) async {
     called = true;
