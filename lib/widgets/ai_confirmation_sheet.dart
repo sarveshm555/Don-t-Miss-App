@@ -171,12 +171,17 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
 
   void _editInForm() {
     if (_draft == null || _isConfirming) return;
-    final task = _draft!.toTask();
+    final draft = _draft!;
+    final task = draft.toTask();
 
     Navigator.of(context).pop();
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => AddEditTaskScreen(initialDraft: task),
+        builder: (_) => AddEditTaskScreen(
+          initialDraft: task,
+          initialAiDraft: draft,
+          actionDispatchService: widget.actionDispatchService,
+        ),
       ),
     );
   }

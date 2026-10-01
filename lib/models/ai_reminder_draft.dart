@@ -50,6 +50,35 @@ class AiReminderDraft {
     );
   }
 
+  /// Returns a copy of this draft with the given fields replaced.
+  AiReminderDraft copyWith({
+    String? title,
+    String? description,
+    DateTime? dueDate,
+    int? dueHour,
+    int? dueMinute,
+    Priority? priority,
+    Recurrence? recurrence,
+    String? url,
+    List<String>? channels,
+    String? reasoning,
+    String? rawPrompt,
+  }) {
+    return AiReminderDraft(
+      title: title ?? this.title,
+      description: description ?? this.description,
+      dueDate: dueDate ?? this.dueDate,
+      dueHour: dueHour ?? this.dueHour,
+      dueMinute: dueMinute ?? this.dueMinute,
+      priority: priority ?? this.priority,
+      recurrence: recurrence ?? this.recurrence,
+      url: url ?? this.url,
+      channels: channels ?? this.channels,
+      reasoning: reasoning ?? this.reasoning,
+      rawPrompt: rawPrompt ?? this.rawPrompt,
+    );
+  }
+
   Map<String, dynamic> toJson() => {
         'title': title,
         'description': description,

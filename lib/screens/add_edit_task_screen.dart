@@ -3,21 +3,27 @@ import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 import '../core/constants/app_colors.dart';
 import '../core/utils/date_time_utils.dart';
+import '../models/ai_reminder_draft.dart';
 import '../models/priority.dart';
 import '../models/recurrence.dart';
 import '../models/task.dart';
 import '../providers/task_provider.dart';
+import '../services/action_dispatch_service.dart';
 import '../services/notification_service.dart';
 
 /// Form screen used to either create a new reminder or edit an existing one.
 class AddEditTaskScreen extends StatefulWidget {
   final Task? taskToEdit;
   final Task? initialDraft;
+  final AiReminderDraft? initialAiDraft;
+  final ActionDispatchService? actionDispatchService;
 
   const AddEditTaskScreen({
     super.key,
     this.taskToEdit,
     this.initialDraft,
+    this.initialAiDraft,
+    this.actionDispatchService,
   });
 
   @override
@@ -37,7 +43,10 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
   late Recurrence _selectedRecurrence;
   late bool _isNotificationEnabled;
 
+  bool _isSaving = false;
+
   bool get _isEditing => widget.taskToEdit != null;
+  bool get _isAiDraft => !_isEditing && (widget.initialAiDraft != null || widget.initialDraft != null);
 
   @override
   void initState() {
@@ -121,38 +130,57 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
   }
 
   Future<void> _saveTask() async {
+    if (_isSaving) return;
     if (!_formKey.currentState!.validate()) return;
 
-    final title = _titleController.text.trim();
-    final description = _descriptionController.text.trim();
-    final rawUrl = _urlController.text.trim();
-    final url = rawUrl.isNotEmpty ? rawUrl : null;
+    setState(() {
+      _isSaving = true;
+    });
 
-    // Check if notification permission is granted if user requested notification
-    if (_isNotificationEnabled) {
-      await NotificationService.instance.requestPermissions();
-    }
+    try {
+      final title = _titleController.text.trim();
+      final description = _descriptionController.text.trim();
+      final rawUrl = _urlController.text.trim();
+      final url = rawUrl.isNotEmpty ? rawUrl : null;
 
-    if (!mounted) return;
+      // Check if notification permission is granted if user requested notification
+      if (_isNotificationEnabled) {
+        await NotificationService.instance.requestPermissions();
+      }
 
-    final taskProvider = Provider.of<TaskProvider>(context, listen: false);
+      if (!mounted) return;
 
-    if (_isEditing) {
-      final updatedTask = widget.taskToEdit!.copyWith(
-        title: title,
-        description: description,
-        dueDate: _selectedDate,
-        dueHour: _selectedTime.hour,
-        dueMinute: _selectedTime.minute,
-        priority: _selectedPriority,
-        recurrence: _selectedRecurrence,
-        url: url,
-        isNotificationEnabled: _isNotificationEnabled,
-      );
-      await taskProvider.updateTask(updatedTask);
-    } else {
+      final taskProvider = Provider.of<TaskProvider>(context, listen: false);
+
+      if (_isEditing) {
+        final updatedTask = widget.taskToEdit!.copyWith(
+          title: title,
+          description: description,
+          dueDate: _selectedDate,
+          dueHour: _selectedTime.hour,
+          dueMinute: _selectedTime.minute,
+          priority: _selectedPriority,
+          recurrence: _selectedRecurrence,
+          url: url,
+          isNotificationEnabled: _isNotificationEnabled,
+        );
+        await taskProvider.updateTask(updatedTask);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Reminder updated!'),
+            backgroundColor: AppColors.primary,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        Navigator.of(context).pop();
+        return;
+      }
+
+      // 1. Create and persist local task first (SQLite + exact alarms)
       final newTask = Task(
-        id: const Uuid().v4(),
+        id: widget.initialDraft?.id ?? const Uuid().v4(),
         title: title,
         description: description,
         dueDate: _selectedDate,
@@ -161,23 +189,115 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
         priority: _selectedPriority,
         recurrence: _selectedRecurrence,
         url: url,
+        channels: widget.initialAiDraft?.channels ??
+            widget.initialDraft?.channels ??
+            const ['local', 'whatsapp'],
         isNotificationEnabled: _isNotificationEnabled,
+        isCompleted: false,
         createdAt: DateTime.now(),
       );
       await taskProvider.addTask(newTask);
-    }
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _isEditing ? 'Reminder updated!' : 'Reminder created!',
+      // 2. If this task originated from an AI proposal, trigger cloud persistence
+      bool? cloudSuccess;
+      if (_isAiDraft) {
+        final confirmedDraft = widget.initialAiDraft != null
+            ? widget.initialAiDraft!.copyWith(
+                title: title,
+                description: description,
+                dueDate: _selectedDate,
+                dueHour: _selectedTime.hour,
+                dueMinute: _selectedTime.minute,
+                priority: _selectedPriority,
+                recurrence: _selectedRecurrence,
+                url: url,
+              )
+            : AiReminderDraft(
+                title: title,
+                description: description,
+                dueDate: _selectedDate,
+                dueHour: _selectedTime.hour,
+                dueMinute: _selectedTime.minute,
+                priority: _selectedPriority,
+                recurrence: _selectedRecurrence,
+                url: url,
+                channels: widget.initialDraft?.channels ?? const ['local', 'whatsapp'],
+                rawPrompt: title,
+              );
+
+        final dispatchService = widget.actionDispatchService ??
+            const BackendActionDispatchService();
+        cloudSuccess =
+            await dispatchService.dispatchConfirmedAction(draft: confirmedDraft);
+      }
+
+      if (!mounted) return;
+
+      // 3. User feedback
+      if (_isAiDraft) {
+        if (cloudSuccess == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Scheduled reminder: "$title"',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Scheduled locally: "$title" (cloud sync offline)',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: AppColors.warning,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Reminder created!'),
+            backgroundColor: AppColors.primary,
+            behavior: SnackBarBehavior.floating,
           ),
-          backgroundColor: AppColors.primary,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+        );
+      }
+
       Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save reminder: $e'),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
@@ -190,11 +310,17 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
         title: Text(_isEditing ? 'Edit Reminder' : 'New Reminder'),
         actions: [
           TextButton.icon(
-            onPressed: _saveTask,
-            icon: const Icon(Icons.check, size: 18),
-            label: const Text(
-              'Save',
-              style: TextStyle(fontWeight: FontWeight.bold),
+            onPressed: _isSaving ? null : _saveTask,
+            icon: _isSaving
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.check, size: 18),
+            label: Text(
+              _isSaving ? 'Saving...' : 'Save',
+              style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
           const SizedBox(width: 8),
@@ -534,12 +660,25 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
 
               // Submit Button
               ElevatedButton.icon(
-                onPressed: _saveTask,
-                icon: Icon(
-                  _isEditing ? Icons.save_rounded : Icons.add_task_rounded,
-                  size: 20,
+                onPressed: _isSaving ? null : _saveTask,
+                icon: _isSaving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(
+                        _isEditing ? Icons.save_rounded : Icons.add_task_rounded,
+                        size: 20,
+                      ),
+                label: Text(
+                  _isSaving
+                      ? 'Saving...'
+                      : (_isEditing ? 'Save Changes' : 'Create Reminder'),
                 ),
-                label: Text(_isEditing ? 'Save Changes' : 'Create Reminder'),
               ),
             ],
           ),
