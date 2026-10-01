@@ -33,6 +33,33 @@ app.add_middleware(
 agent = ReminderAgent()
 action_router = ActionRouter()
 
+def parse_due_date(due_date_str: str | None) -> date | None:
+    """Safely parse an incoming dueDate string into a Python date.
+
+    Supports:
+    - YYYY-MM-DD
+    - YYYY-MM-DDTHH:MM:SS
+    - YYYY-MM-DDTHH:MM:SS.mmm
+    - ISO strings ending with Z or UTC offsets
+    """
+    if not due_date_str or not due_date_str.strip():
+        return None
+    clean_str = due_date_str.strip()
+    if clean_str.endswith("Z") or clean_str.endswith("z"):
+        clean_str = clean_str[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(clean_str).date()
+    except (ValueError, TypeError):
+        pass
+    try:
+        return date.fromisoformat(clean_str)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return date.fromisoformat(clean_str.split("T")[0].split(" ")[0])
+    except Exception:
+        return None
+
 def _persist_confirmed_reminder_to_db(draft, user_phone_number: str | None, channels_dispatched: list[str]) -> str | None:
     """Persist a human-confirmed reminder and record audit history in PostgreSQL.
     
@@ -57,13 +84,8 @@ def _persist_confirmed_reminder_to_db(draft, user_phone_number: str | None, chan
                 session.add(user)
                 session.commit()
 
-            # 2. Parse due date
-            due_d = None
-            if draft.dueDate:
-                try:
-                    due_d = date.fromisoformat(draft.dueDate)
-                except Exception:
-                    due_d = None
+            # 2. Parse due date safely across ISO 8601 date and datetime formats
+            due_d = parse_due_date(draft.dueDate)
 
             # 3. Create reminder record with status CONFIRMED
             reminder = Reminder(

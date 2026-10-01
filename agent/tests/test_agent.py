@@ -1,3 +1,4 @@
+from datetime import date
 import pytest
 from fastapi.testclient import TestClient
 from agent.models.reminder_schema import ReminderDraft, ReminderProposal, AgentRequest, AgentResponse
@@ -7,9 +8,9 @@ from agent.providers.openai_provider import OpenAIProvider
 from agent.services.whatsapp_service import BaseWhatsAppService, TwilioWhatsAppService
 from agent.services.action_router import ActionRouter
 from agent.services.password_service import hash_password, verify_password
-from agent.database.connection import get_database_url, init_db, get_db_engine
-from agent.database.models import User, Reminder, ReminderChannel
-from agent.app import app
+from agent.database.connection import get_database_url, init_db, get_db_engine, get_db_session
+from agent.database.models import User, Reminder, ReminderChannel, ActionHistory
+from agent.app import app, parse_due_date
 
 def test_reminder_draft_schema_valid():
     draft = ReminderDraft(
@@ -269,3 +270,61 @@ def test_database_initialization_and_schema():
     assert "reminder_channels" in table_names
     assert "phone_verifications" in table_names
     assert "action_history" in table_names
+
+def test_parse_due_date_iso_formats():
+    # 1. Full Flutter ISO-8601 with milliseconds
+    assert parse_due_date("2026-10-01T00:00:00.000") == date(2026, 10, 1)
+
+    # 2. Standard YYYY-MM-DD
+    assert parse_due_date("2026-10-01") == date(2026, 10, 1)
+
+    # 3. ISO datetime without milliseconds
+    assert parse_due_date("2026-10-01T15:30:00") == date(2026, 10, 1)
+
+    # 4. ISO datetime ending with UTC 'Z'
+    assert parse_due_date("2026-10-01T15:30:00Z") == date(2026, 10, 1)
+    assert parse_due_date("2026-10-01T15:30:00.000Z") == date(2026, 10, 1)
+
+    # 5. None and empty string
+    assert parse_due_date(None) is None
+    assert parse_due_date("") is None
+    assert parse_due_date("   ") is None
+
+def test_action_confirm_persists_full_iso_due_date():
+    client = TestClient(app)
+    payload = {
+        "action": "confirm_reminder",
+        "draft": {
+            "title": "Assignment Submission",
+            "dueDate": "2026-10-01T00:00:00.000",
+            "dueHour": 18,
+            "dueMinute": 0,
+            "priority": "high",
+            "recurrence": "none",
+            "channels": ["local", "whatsapp"]
+        },
+        "user_phone_number": "+1987654321"
+    }
+    response = client.post("/action/confirm", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+
+    # Verify that the reminder record in the database persisted the parsed date, NOT NULL
+    session = next(get_db_session())
+    try:
+        created_reminder = (
+            session.query(Reminder)
+            .filter_by(title="Assignment Submission")
+            .order_by(Reminder.created_at.desc())
+            .first()
+        )
+        assert created_reminder is not None
+        assert created_reminder.due_date == date(2026, 10, 1)
+        assert created_reminder.status == "CONFIRMED"
+
+        # Cleanup test record
+        session.delete(created_reminder)
+        session.commit()
+    finally:
+        session.close()

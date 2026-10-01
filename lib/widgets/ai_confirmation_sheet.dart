@@ -53,6 +53,7 @@ class AiConfirmationSheet extends StatefulWidget {
 class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
   late final TextEditingController _promptController;
   bool _isProcessing = false;
+  bool _isConfirming = false;
   String? _errorMessage;
   AiReminderDraft? _draft;
 
@@ -105,44 +106,71 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
   }
 
   Future<void> _confirmAndAdd() async {
-    if (_draft == null) return;
+    if (_draft == null || _isConfirming) return;
 
-    final task = _draft!.toTask();
+    setState(() {
+      _isConfirming = true;
+    });
+
+    final draft = _draft!;
+    final task = draft.toTask();
     final provider = Provider.of<TaskProvider>(context, listen: false);
+
+    // 1. Local persistence and notification scheduling
     await provider.addTask(task);
 
-    // If WhatsApp channel is included, trigger backend action router
-    if (_draft!.channels.contains('whatsapp')) {
-      final dispatchService = widget.actionDispatchService ??
-          const BackendActionDispatchService();
-      dispatchService.dispatchConfirmedAction(draft: _draft!);
-    }
+    // 2. Cloud persistence and external action routing for all confirmed AI reminders
+    final dispatchService = widget.actionDispatchService ??
+        const BackendActionDispatchService();
+    final cloudSuccess =
+        await dispatchService.dispatchConfirmedAction(draft: draft);
 
     if (!mounted) return;
     Navigator.of(context).pop();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Scheduled reminder: "${task.title}"',
-                overflow: TextOverflow.ellipsis,
+    if (cloudSuccess) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Scheduled reminder: "${task.title}"',
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
         ),
-        backgroundColor: AppColors.success,
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Scheduled locally: "${task.title}" (cloud sync offline)',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: AppColors.warning,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _editInForm() {
-    if (_draft == null) return;
+    if (_draft == null || _isConfirming) return;
     final task = _draft!.toTask();
 
     Navigator.of(context).pop();
@@ -154,9 +182,11 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
   }
 
   void _resetDraft() {
+    if (_isConfirming) return;
     setState(() {
       _draft = null;
       _errorMessage = null;
+      _isConfirming = false;
     });
   }
 
@@ -334,11 +364,20 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
 
               // Confirm & Add (Primary Action)
               ElevatedButton.icon(
-                onPressed: _confirmAndAdd,
-                icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
-                label: const Text(
-                  'Confirm & Add',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                onPressed: _isConfirming ? null : _confirmAndAdd,
+                icon: _isConfirming
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check_circle_outline_rounded, size: 18),
+                label: Text(
+                  _isConfirming ? 'Confirming & Syncing...' : 'Confirm & Add',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
               const SizedBox(height: 10),
@@ -348,7 +387,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: _editInForm,
+                      onPressed: _isConfirming ? null : _editInForm,
                       icon: const Icon(Icons.edit_note_rounded, size: 18),
                       label: const Text('Edit in Form'),
                     ),
@@ -356,7 +395,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextButton.icon(
-                      onPressed: _resetDraft,
+                      onPressed: _isConfirming ? null : _resetDraft,
                       icon: const Icon(Icons.refresh_rounded, size: 18),
                       label: const Text('Try Another'),
                     ),
