@@ -13,6 +13,7 @@ abstract class ActionDispatchService {
     String? userPhoneNumber,
     String? userId,
     String? authToken,
+    String? reminderId,
   });
 }
 
@@ -39,12 +40,14 @@ class BackendActionDispatchService implements ActionDispatchService {
     String? userPhoneNumber,
     String? userId,
     String? authToken,
+    String? reminderId,
   }) async {
     final payload = {
       'action': 'confirm_reminder',
       'draft': draft.toJson(),
       'user_phone_number': userPhoneNumber,
       if (userId != null) 'user_id': userId,
+      if (reminderId != null) 'reminder_id': reminderId,
     };
 
     final headers = <String, String>{};
