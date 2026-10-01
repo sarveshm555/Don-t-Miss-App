@@ -232,7 +232,7 @@ void main() {
   });
 }
 
-class _MockAgentHttpTransport implements AgentHttpTransport {
+class _MockAgentHttpTransport extends AgentHttpTransport {
   final int statusCode;
   final String body;
   bool called = false;
