@@ -59,6 +59,7 @@ class FakeActionDispatchService implements ActionDispatchService {
     String? userPhoneNumber,
     String? userId,
     String? authToken,
+    String? reminderId,
   }) async {
     dispatchCount++;
     lastDispatchedDraft = draft;
@@ -100,6 +101,7 @@ void main() {
             initialDraft: aiDraft.toTask(),
             initialAiDraft: aiDraft,
             actionDispatchService: dispatchService,
+            notificationService: notificationService,
           ),
         ),
       );
