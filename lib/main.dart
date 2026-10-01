@@ -27,10 +27,11 @@ class DontMissApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (_) => TaskProvider(),
-        ),
-        ChangeNotifierProvider(
           create: (_) => AuthProvider(),
+        ),
+        ChangeNotifierProxyProvider<AuthProvider, TaskProvider>(
+          create: (_) => TaskProvider(),
+          update: (_, auth, task) => (task ?? TaskProvider())..bindAuth(auth),
         ),
       ],
       child: MaterialApp(
