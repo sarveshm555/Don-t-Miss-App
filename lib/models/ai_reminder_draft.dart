@@ -32,7 +32,8 @@ class AiReminderDraft {
   });
 
   /// Bridges this AI draft into an immutable [Task] ready for persistence and notification scheduling.
-  Task toTask({String? id, DateTime? createdAt}) {
+  Task toTask({String? id, DateTime? createdAt, DateTime? updatedAt}) {
+    final now = DateTime.now();
     return Task(
       id: id ?? const Uuid().v4(),
       title: title,
@@ -46,7 +47,8 @@ class AiReminderDraft {
       channels: channels,
       isNotificationEnabled: true,
       isCompleted: false,
-      createdAt: createdAt ?? DateTime.now(),
+      createdAt: createdAt ?? now,
+      updatedAt: updatedAt ?? createdAt ?? now,
     );
   }
 
