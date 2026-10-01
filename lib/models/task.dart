@@ -16,6 +16,7 @@ class Task {
   final bool isNotificationEnabled;
   final bool isCompleted;
   final DateTime createdAt;
+  final DateTime? updatedAt;
 
   const Task({
     required this.id,
@@ -31,6 +32,7 @@ class Task {
     this.isNotificationEnabled = true,
     this.isCompleted = false,
     required this.createdAt,
+    this.updatedAt,
   });
 
   /// Combines [dueDate], [dueHour], and [dueMinute] into a single [DateTime].
@@ -93,6 +95,7 @@ class Task {
     bool? isNotificationEnabled,
     bool? isCompleted,
     DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     return Task(
       id: id ?? this.id,
@@ -108,6 +111,7 @@ class Task {
       isNotificationEnabled: isNotificationEnabled ?? this.isNotificationEnabled,
       isCompleted: isCompleted ?? this.isCompleted,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 
@@ -127,6 +131,7 @@ class Task {
       'isNotificationEnabled': isNotificationEnabled,
       'isCompleted': isCompleted,
       'createdAt': createdAt.toIso8601String(),
+      'updatedAt': (updatedAt ?? createdAt).toIso8601String(),
     };
   }
 
@@ -150,6 +155,11 @@ class Task {
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),
+      updatedAt: json['updatedAt'] != null
+          ? DateTime.parse(json['updatedAt'] as String)
+          : (json['createdAt'] != null
+              ? DateTime.parse(json['createdAt'] as String)
+              : null),
     );
   }
 }
