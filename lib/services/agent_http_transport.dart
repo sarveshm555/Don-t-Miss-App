@@ -10,6 +10,34 @@ abstract class AgentHttpTransport {
     Map<String, String>? headers,
     dynamic clientFactory,
   });
+
+  Future<AgentHttpResponse> get({
+    required Uri uri,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    throw UnimplementedError('GET not implemented');
+  }
+
+  Future<AgentHttpResponse> putJson({
+    required Uri uri,
+    required Map<String, dynamic> payload,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    throw UnimplementedError('PUT not implemented');
+  }
+
+  Future<AgentHttpResponse> delete({
+    required Uri uri,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    throw UnimplementedError('DELETE not implemented');
+  }
 }
 
 AgentHttpTransport createAgentHttpTransport() => getAgentHttpTransport();

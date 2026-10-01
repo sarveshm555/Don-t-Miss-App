@@ -7,19 +7,20 @@ import 'agent_http_transport.dart';
 AgentHttpTransport getAgentHttpTransport() => HtmlAgentHttpTransport();
 
 class HtmlAgentHttpTransport implements AgentHttpTransport {
-  @override
-  Future<AgentHttpResponse> postJson({
-    required Uri uri,
-    required Map<String, dynamic> payload,
+  Future<AgentHttpResponse> _send(
+    String method,
+    Uri uri, {
+    Map<String, dynamic>? payload,
     required Duration timeout,
     Map<String, String>? headers,
-    dynamic clientFactory,
-  }) async {
+  }) {
     final completer = Completer<AgentHttpResponse>();
     final request = html.HttpRequest();
 
-    request.open('POST', uri.toString(), async: true);
-    request.setRequestHeader('Content-Type', 'application/json');
+    request.open(method, uri.toString(), async: true);
+    if (payload != null) {
+      request.setRequestHeader('Content-Type', 'application/json');
+    }
     if (headers != null) {
       headers.forEach((key, value) {
         request.setRequestHeader(key, value);
@@ -55,7 +56,11 @@ class HtmlAgentHttpTransport implements AgentHttpTransport {
     });
 
     try {
-      request.send(jsonEncode(payload));
+      if (payload != null) {
+        request.send(jsonEncode(payload));
+      } else {
+        request.send();
+      }
     } catch (e) {
       if (!completer.isCompleted) {
         completer.completeError(
@@ -65,5 +70,47 @@ class HtmlAgentHttpTransport implements AgentHttpTransport {
     }
 
     return completer.future;
+  }
+
+  @override
+  Future<AgentHttpResponse> postJson({
+    required Uri uri,
+    required Map<String, dynamic> payload,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    return _send('POST', uri, payload: payload, timeout: timeout, headers: headers);
+  }
+
+  @override
+  Future<AgentHttpResponse> get({
+    required Uri uri,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    return _send('GET', uri, timeout: timeout, headers: headers);
+  }
+
+  @override
+  Future<AgentHttpResponse> putJson({
+    required Uri uri,
+    required Map<String, dynamic> payload,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    return _send('PUT', uri, payload: payload, timeout: timeout, headers: headers);
+  }
+
+  @override
+  Future<AgentHttpResponse> delete({
+    required Uri uri,
+    required Duration timeout,
+    Map<String, String>? headers,
+    dynamic clientFactory,
+  }) {
+    return _send('DELETE', uri, timeout: timeout, headers: headers);
   }
 }
