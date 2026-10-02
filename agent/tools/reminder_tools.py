@@ -1,6 +1,6 @@
 import threading
 from typing import Optional, Dict, Any, List
-from strands import tool
+
 
 class ProposalTracker:
     def __init__(self):
@@ -26,9 +26,10 @@ class ProposalTracker:
         with self._lock:
             return self._call_count
 
+
 proposal_tracker = ProposalTracker()
 
-@tool
+
 def create_reminder(
     title: str,
     description: Optional[str] = None,
@@ -43,25 +44,25 @@ def create_reminder(
 ) -> Dict[str, Any]:
     """Propose a new reminder to the user.
 
-    This tool DOES NOT directly create or persist the reminder. It creates a structured
-    proposal that requires explicit user confirmation before any reminder is saved.
+    This function DOES NOT directly create or persist the reminder.
+    It creates a structured proposal that requires explicit user
+    confirmation before any reminder is saved.
 
     Args:
-        title: The reminder title or core task name (e.g. 'Amazon interview', 'Dentist appointment').
+        title: The reminder title or core task name.
         description: Additional details, context, notes, or reasons.
-        due_date: Due date formatted strictly as 'YYYY-MM-DD'.
-        due_hour: Hour of the due time in 24-hour format (0 to 23). E.g. 21 for 9 PM, 9 for 9 AM.
+        due_date: Due date formatted as 'YYYY-MM-DD'.
+        due_hour: Hour of the due time in 24-hour format (0 to 23).
         due_minute: Minute of the due time (0 to 59).
-        priority: Priority level, must be one of: 'low', 'medium', 'high'. Default is 'medium'.
-        recurrence: Recurrence frequency, must be one of: 'none', 'daily', 'weekly', 'monthly'. Default is 'none'.
-        url: Any website URL mentioned (e.g. 'https://...').
-        channels: Delivery channels, e.g. ['local', 'whatsapp']. Default is ['local', 'whatsapp'].
+        priority: Priority level: low, medium, or high.
+        recurrence: Recurrence frequency: none, daily, weekly, or monthly.
+        url: Any website URL mentioned.
+        channels: Delivery channels, e.g. ['local', 'whatsapp'].
         reasoning: Brief note explaining the extracted details.
 
     Returns:
         A dictionary containing the structured reminder proposal.
     """
-    print("STRANDS_TOOL_INVOKED:create_reminder", flush=True)
 
     norm_priority = priority.lower() if priority else "medium"
     if norm_priority not in ("low", "medium", "high"):
@@ -71,7 +72,11 @@ def create_reminder(
     if norm_recurrence not in ("none", "daily", "weekly", "monthly"):
         norm_recurrence = "none"
 
-    norm_channels = channels if channels and isinstance(channels, list) else ["local", "whatsapp"]
+    norm_channels = (
+        channels
+        if channels and isinstance(channels, list)
+        else ["local", "whatsapp"]
+    )
 
     proposal_data = {
         "status": "PROPOSED",
@@ -87,8 +92,9 @@ def create_reminder(
             "recurrence": norm_recurrence,
             "url": url,
             "channels": norm_channels,
-            "reasoning": reasoning or "Extracted via Strands create_reminder tool",
-        }
+            "reasoning": reasoning or "Extracted via OpenAI reminder parser",
+        },
     }
+
     proposal_tracker.record(proposal_data)
     return proposal_data
