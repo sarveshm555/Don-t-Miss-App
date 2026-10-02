@@ -56,6 +56,7 @@ class ReminderCreateRequest(BaseModel):
     recurrence: Optional[Literal["none", "daily", "weekly", "monthly"]] = Field("none", description="Recurrence rule")
     url: Optional[str] = Field(None, max_length=1024, description="Associated URL")
     status: Optional[str] = Field("CONFIRMED", description="Reminder status")
+    completed_at: Optional[str] = Field(None, description="Completion ISO timestamp")
     raw_prompt: Optional[str] = Field(None, description="Original user prompt")
     channels: Optional[List[str]] = Field(default_factory=lambda: ["local", "whatsapp"], description="Delivery channels")
 
@@ -69,6 +70,7 @@ class ReminderUpdateRequest(BaseModel):
     recurrence: Optional[Literal["none", "daily", "weekly", "monthly"]] = None
     url: Optional[str] = None
     status: Optional[str] = None
+    completed_at: Optional[str] = None
     raw_prompt: Optional[str] = None
     channels: Optional[List[str]] = None
 
@@ -84,6 +86,7 @@ class ReminderResponse(BaseModel):
     recurrence: str
     url: Optional[str] = None
     status: str
+    completed_at: Optional[str] = None
     raw_prompt: Optional[str] = None
     channels: List[str] = Field(default_factory=lambda: ["local"])
     created_at: str

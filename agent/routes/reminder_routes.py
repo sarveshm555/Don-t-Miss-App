@@ -56,6 +56,7 @@ def _reminder_to_response(reminder: Reminder) -> ReminderResponse:
         recurrence=reminder.recurrence,
         url=reminder.url,
         status=reminder.status,
+        completed_at=reminder.completed_at.isoformat() if reminder.completed_at else None,
         raw_prompt=reminder.raw_prompt,
         channels=channels,
         created_at=reminder.created_at.isoformat() if reminder.created_at else "",
@@ -103,6 +104,15 @@ def create_reminder(
             raise HTTPException(status_code=400, detail="Invalid due_date format. Expected YYYY-MM-DD.")
 
     reminder_id = request.id.strip() if request.id and request.id.strip() else generate_uuid()
+    comp_dt = None
+    if request.completed_at and request.completed_at.strip():
+        try:
+            clean_c = request.completed_at.strip().replace("Z", "+00:00").replace("z", "+00:00")
+            comp_dt = datetime.fromisoformat(clean_c)
+        except Exception:
+            pass
+    elif (request.status or "").upper() == "COMPLETED":
+        comp_dt = get_utc_now()
 
     try:
         existing = db.query(Reminder).filter(Reminder.id == reminder_id).first()
@@ -119,6 +129,7 @@ def create_reminder(
             existing.recurrence = request.recurrence or "none"
             existing.url = request.url
             existing.status = request.status or "CONFIRMED"
+            existing.completed_at = comp_dt
             existing.raw_prompt = request.raw_prompt or request.title
             existing.updated_at = get_utc_now()
 
@@ -148,6 +159,7 @@ def create_reminder(
             recurrence=request.recurrence or "none",
             url=request.url,
             status=request.status or "CONFIRMED",
+            completed_at=comp_dt,
             raw_prompt=request.raw_prompt or request.title,
         )
         db.add(new_reminder)
@@ -207,6 +219,20 @@ def update_reminder(
             reminder.url = request.url
         if request.status is not None:
             reminder.status = request.status
+        if request.completed_at is not None:
+            if request.completed_at.strip():
+                try:
+                    clean_c = request.completed_at.strip().replace("Z", "+00:00").replace("z", "+00:00")
+                    reminder.completed_at = datetime.fromisoformat(clean_c)
+                except Exception:
+                    pass
+            else:
+                reminder.completed_at = None
+        elif (request.status or "").upper() == "COMPLETED" and not reminder.completed_at:
+            reminder.completed_at = get_utc_now()
+        elif (request.status or "").upper() == "CONFIRMED":
+            reminder.completed_at = None
+
         if request.raw_prompt is not None:
             reminder.raw_prompt = request.raw_prompt
 

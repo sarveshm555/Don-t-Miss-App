@@ -60,6 +60,21 @@ class TaskProvider extends ChangeNotifier {
   int get overdueCount =>
       _tasks.where((t) => t.isOverdueAt(_clock())).length;
 
+  /// Returns only active/incomplete tasks.
+  List<Task> get activeTasks =>
+      _tasks.where((t) => !t.isCompleted).toList();
+
+  /// Returns completed tasks sorted by completed date descending (newest first).
+  List<Task> get historyTasks {
+    final list = _tasks.where((t) => t.isCompleted).toList();
+    list.sort((a, b) {
+      final aTime = a.completedAt ?? a.updatedAt ?? a.createdAt;
+      final bTime = b.completedAt ?? b.updatedAt ?? b.createdAt;
+      return bTime.compareTo(aTime);
+    });
+    return list;
+  }
+
   /// Returns tasks filtered by both the selected category and search query.
   List<Task> get filteredTasks {
     final now = _clock();
@@ -67,15 +82,16 @@ class TaskProvider extends ChangeNotifier {
       // 1. Filter by status / priority / time
       switch (_selectedFilter) {
         case TaskFilter.all:
+          if (task.isCompleted) return false;
           break;
         case TaskFilter.pending:
           if (task.isCompleted) return false;
           break;
         case TaskFilter.today:
-          if (!task.isDueOnDay(now)) return false;
+          if (task.isCompleted || !task.isDueOnDay(now)) return false;
           break;
         case TaskFilter.overdue:
-          if (!task.isOverdueAt(now)) return false;
+          if (task.isCompleted || !task.isOverdueAt(now)) return false;
           break;
         case TaskFilter.highPriority:
           if (task.isCompleted || task.priority != Priority.high) return false;
@@ -259,10 +275,13 @@ class TaskProvider extends ChangeNotifier {
     if (index == -1) return;
 
     final task = _tasks[index];
+    final now = _clock();
     final newCompletedState = !task.isCompleted;
     final updatedTask = task.copyWith(
       isCompleted: newCompletedState,
-      updatedAt: DateTime.now(),
+      completedAt: newCompletedState ? (task.completedAt ?? now) : null,
+      clearCompletedAt: !newCompletedState,
+      updatedAt: now,
     );
 
     _tasks[index] = updatedTask;

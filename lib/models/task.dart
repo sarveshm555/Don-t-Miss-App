@@ -15,6 +15,7 @@ class Task {
   final List<String> channels;
   final bool isNotificationEnabled;
   final bool isCompleted;
+  final DateTime? completedAt;
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -31,6 +32,7 @@ class Task {
     this.channels = const ['local', 'whatsapp'],
     this.isNotificationEnabled = true,
     this.isCompleted = false,
+    this.completedAt,
     required this.createdAt,
     this.updatedAt,
   });
@@ -94,6 +96,8 @@ class Task {
     List<String>? channels,
     bool? isNotificationEnabled,
     bool? isCompleted,
+    DateTime? completedAt,
+    bool clearCompletedAt = false,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -110,6 +114,7 @@ class Task {
       channels: channels ?? this.channels,
       isNotificationEnabled: isNotificationEnabled ?? this.isNotificationEnabled,
       isCompleted: isCompleted ?? this.isCompleted,
+      completedAt: clearCompletedAt ? null : (completedAt ?? this.completedAt),
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -130,6 +135,7 @@ class Task {
       'channels': channels,
       'isNotificationEnabled': isNotificationEnabled,
       'isCompleted': isCompleted,
+      'completedAt': completedAt?.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
       'updatedAt': (updatedAt ?? createdAt).toIso8601String(),
     };
@@ -152,6 +158,9 @@ class Task {
           : const ['local', 'whatsapp'],
       isNotificationEnabled: json['isNotificationEnabled'] as bool? ?? true,
       isCompleted: json['isCompleted'] as bool? ?? false,
+      completedAt: (json['completedAt'] ?? json['completed_at']) != null
+          ? DateTime.parse((json['completedAt'] ?? json['completed_at']) as String)
+          : null,
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),

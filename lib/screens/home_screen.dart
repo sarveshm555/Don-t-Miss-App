@@ -10,6 +10,8 @@ import '../widgets/empty_state_view.dart';
 import '../widgets/task_card.dart';
 import '../widgets/task_stats_card.dart';
 import 'add_edit_task_screen.dart';
+import 'history_screen.dart';
+import 'profile_screen.dart';
 
 /// The main dashboard view displaying task statistics, filters, search, and list.
 class HomeScreen extends StatefulWidget {
@@ -91,6 +93,17 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'AI Reminder Assistant',
             color: AppColors.primary,
             onPressed: () => _openAiAssistant(context),
+          ),
+          IconButton(
+            key: const Key('home_history_action_button'),
+            icon: const Icon(Icons.history_rounded),
+            tooltip: 'Reminder History',
+            color: AppColors.primary,
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const HistoryScreen()),
+              );
+            },
           ),
           const _AccountActionButton(),
           const SizedBox(width: 4),
@@ -399,7 +412,15 @@ class _AccountActionButton extends StatelessWidget {
       icon: const Icon(Icons.account_circle_outlined, color: AppColors.primary),
       tooltip: 'Account',
       onSelected: (value) async {
-        if (value == 'sign_out') {
+        if (value == 'profile') {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const ProfileScreen()),
+          );
+        } else if (value == 'history') {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const HistoryScreen()),
+          );
+        } else if (value == 'sign_out') {
           await context.read<AuthProvider>().signOut();
         }
       },
@@ -428,6 +449,38 @@ class _AccountActionButton extends StatelessWidget {
                 ),
               ],
               const Divider(),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'profile',
+          child: Row(
+            children: [
+              Icon(Icons.person_outline_rounded, color: AppColors.primary, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Profile',
+                style: TextStyle(
+                  color: AppColors.textPrimaryLight,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'history',
+          child: Row(
+            children: [
+              Icon(Icons.history_rounded, color: AppColors.primary, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Reminder History',
+                style: TextStyle(
+                  color: AppColors.textPrimaryLight,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ],
           ),
         ),

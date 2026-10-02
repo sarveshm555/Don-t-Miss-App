@@ -88,6 +88,18 @@ class ReminderSyncService {
     final status = (json['status'] as String?)?.toUpperCase();
     final isCompleted = status == 'COMPLETED';
 
+    DateTime? completedAt;
+    try {
+      final rawCompleted = (json['completed_at'] ?? json['completedAt']) as String?;
+      if (rawCompleted != null && rawCompleted.isNotEmpty) {
+        completedAt = DateTime.parse(rawCompleted);
+      } else if (isCompleted) {
+        completedAt = updatedAt;
+      }
+    } catch (_) {
+      completedAt = isCompleted ? updatedAt : null;
+    }
+
     return Task(
       id: json['id'] as String,
       title: json['title'] as String,
@@ -104,6 +116,7 @@ class ReminderSyncService {
           const ['local', 'whatsapp'],
       isNotificationEnabled: true,
       isCompleted: isCompleted,
+      completedAt: completedAt,
       createdAt: createdAt,
       updatedAt: updatedAt,
     );
@@ -127,6 +140,7 @@ class ReminderSyncService {
       'url': task.url,
       'channels': task.channels,
       'status': task.isCompleted ? 'COMPLETED' : 'CONFIRMED',
+      'completed_at': task.completedAt?.toIso8601String(),
     };
   }
 

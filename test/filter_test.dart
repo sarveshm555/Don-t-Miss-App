@@ -147,10 +147,19 @@ void main() {
       expect(provider.highPriorityCount, 2); // only uncompleted high priority
     });
 
-    test('TaskFilter.all returns all reminders', () {
+    test('TaskFilter.all returns only active reminders', () {
       provider.setFilter(TaskFilter.all);
-      expect(provider.filteredTasks.length, 6);
-      expect(provider.filteredTasks.length, provider.totalCount);
+      expect(provider.filteredTasks.length, 4);
+      expect(provider.filteredTasks.every((t) => !t.isCompleted), isTrue);
+    });
+
+    test('Marking task completed removes it immediately from TaskFilter.all and moves to historyTasks', () async {
+      provider.setFilter(TaskFilter.all);
+      expect(provider.filteredTasks.any((t) => t.id == 'task-today-pending'), isTrue);
+      await provider.toggleTaskStatus('task-today-pending');
+      expect(provider.filteredTasks.any((t) => t.id == 'task-today-pending'), isFalse);
+      expect(provider.historyTasks.any((t) => t.id == 'task-today-pending'), isTrue);
+      expect(provider.historyTasks.firstWhere((t) => t.id == 'task-today-pending').completedAt, isNotNull);
     });
 
     test('TaskFilter.pending returns only uncompleted reminders', () {

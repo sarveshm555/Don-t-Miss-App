@@ -51,6 +51,7 @@ class Reminder(Base):
     recurrence = Column(String(32), default="none", nullable=False)   # 'none', 'daily', 'weekly', 'monthly'
     url = Column(String(1024), nullable=True)
     status = Column(String(32), default="PROPOSED", nullable=False)  # 'PROPOSED', 'CONFIRMED', 'CANCELLED', 'COMPLETED'
+    completed_at = Column(DateTime(timezone=True), nullable=True)
     raw_prompt = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now, nullable=False)

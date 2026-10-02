@@ -110,15 +110,15 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     });
 
-    test('Empty search query returns all reminders', () {
+    test('Empty search query returns all active reminders', () {
       provider.setSearchQuery('');
-      expect(provider.filteredTasks.length, 4);
+      expect(provider.filteredTasks.length, 3);
       expect(provider.searchQuery, isEmpty);
     });
 
-    test('Whitespace-only query trims to empty and returns all reminders', () {
+    test('Whitespace-only query trims to empty and returns all active reminders', () {
       provider.setSearchQuery('   ');
-      expect(provider.filteredTasks.length, 4);
+      expect(provider.filteredTasks.length, 3);
       expect(provider.searchQuery, isEmpty);
     });
 
@@ -161,13 +161,13 @@ void main() {
       expect(provider.filteredTasks, isEmpty);
     });
 
-    test('Clearing search resets to all reminders', () {
+    test('Clearing search resets to all active reminders', () {
       provider.setSearchQuery('amazon');
       expect(provider.filteredTasks.length, 1);
 
       provider.clearSearch();
       expect(provider.searchQuery, isEmpty);
-      expect(provider.filteredTasks.length, 4);
+      expect(provider.filteredTasks.length, 3);
     });
 
     test('Search query combined with filter chips', () {
@@ -226,7 +226,7 @@ void main() {
 
       expect(find.byType(TextField), findsOneWidget);
       expect(find.text('Search tasks, deadlines, keywords...'), findsOneWidget);
-      expect(find.byType(TaskCard), findsNWidgets(4));
+      expect(find.byType(TaskCard), findsNWidgets(3));
     });
 
     testWidgets('Typing into search field filters reminder list', (tester) async {
@@ -262,8 +262,8 @@ void main() {
       await tester.tap(find.byIcon(Icons.clear));
       await tester.pumpAndSettle();
 
-      // All tasks should be restored
-      expect(find.byType(TaskCard), findsNWidgets(4));
+      // All active tasks should be restored
+      expect(find.byType(TaskCard), findsNWidgets(3));
     });
 
     testWidgets('Query with no matches displays EmptyStateView with Clear Search button', (tester) async {
@@ -288,7 +288,7 @@ void main() {
       await tester.tap(find.text('Clear Search'));
       await tester.pumpAndSettle();
 
-      expect(find.byType(TaskCard), findsNWidgets(4));
+      expect(find.byType(TaskCard), findsNWidgets(3));
     });
   });
 }
