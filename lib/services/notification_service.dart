@@ -1,4 +1,5 @@
 import 'dart:developer' as developer;
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
@@ -8,11 +9,17 @@ import '../models/task.dart';
 
 /// Central service for initializing, scheduling, and cancelling local notifications.
 class NotificationService {
-  NotificationService._internal();
+  NotificationService._internal({FlutterLocalNotificationsPlugin? plugin})
+      : _notificationsPlugin = plugin ?? FlutterLocalNotificationsPlugin();
+
   static final NotificationService instance = NotificationService._internal();
 
-  final FlutterLocalNotificationsPlugin _notificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  /// Test-accessible factory constructor
+  factory NotificationService.withPlugin(FlutterLocalNotificationsPlugin plugin) {
+    return NotificationService._internal(plugin: plugin);
+  }
+
+  final FlutterLocalNotificationsPlugin _notificationsPlugin;
 
   static const String channelId = 'dont_miss_reminders_channel';
   static const String channelName = "Don't Miss Reminders";
@@ -20,6 +27,15 @@ class NotificationService {
       'Scheduled alerts for upcoming deadlines and tasks.';
 
   bool _isInitialized = false;
+  String _activeIconName = 'ic_notification';
+  String? _lastError;
+
+  // Diagnostic and status properties exposed statically for easy monitoring without breaking interface
+  static bool get isInitialized => instance._isInitialized;
+  static String get activeIconName => instance._activeIconName;
+  static String? get lastError => instance._lastError;
+  static Future<List<PendingNotificationRequest>> getPendingNotificationRequests() =>
+      instance._getPendingNotificationRequests();
 
   /// Initializes timezone database, detects device timezone, and configures the notification plugin.
   Future<void> init() async {
@@ -32,10 +48,8 @@ class NotificationService {
         tz.setLocalLocation(tz.getLocation(timeZoneInfo.identifier));
       } catch (e) {
         developer.log('Could not configure local timezone from device: $e');
+        debugPrint('[NotificationService] Timezone auto-detect warning: $e');
       }
-
-      const AndroidInitializationSettings androidSettings =
-          AndroidInitializationSettings('ic_notification');
 
       const DarwinInitializationSettings iosSettings =
           DarwinInitializationSettings(
@@ -44,17 +58,40 @@ class NotificationService {
         requestSoundPermission: true,
       );
 
-      const InitializationSettings initSettings = InitializationSettings(
+      // Attempt initialization with primary drawable icon ('ic_notification')
+      AndroidInitializationSettings androidSettings =
+          AndroidInitializationSettings(_activeIconName);
+      InitializationSettings initSettings = InitializationSettings(
         android: androidSettings,
         iOS: iosSettings,
       );
 
-      await _notificationsPlugin.initialize(
-        initSettings,
-        onDidReceiveNotificationResponse: (NotificationResponse response) {
-          developer.log('Notification tapped with payload: ${response.payload}');
-        },
-      );
+      bool initialized = false;
+      try {
+        final result = await _notificationsPlugin.initialize(
+          initSettings,
+          onDidReceiveNotificationResponse: (NotificationResponse response) {
+            developer.log('Notification tapped with payload: ${response.payload}');
+          },
+        );
+        initialized = result ?? false;
+      } catch (iconError) {
+        debugPrint('[NotificationService] Primary icon "$_activeIconName" failed: $iconError');
+        // Graceful fallback to guaranteed launcher icon
+        _activeIconName = '@mipmap/ic_launcher';
+        androidSettings = AndroidInitializationSettings(_activeIconName);
+        initSettings = InitializationSettings(
+          android: androidSettings,
+          iOS: iosSettings,
+        );
+        final result = await _notificationsPlugin.initialize(
+          initSettings,
+          onDidReceiveNotificationResponse: (NotificationResponse response) {
+            developer.log('Notification tapped with payload: ${response.payload}');
+          },
+        );
+        initialized = result ?? false;
+      }
 
       // Explicitly register notification channel for Android 8.0+ (Oreo)
       final androidImplementation = _notificationsPlugin
@@ -69,11 +106,16 @@ class NotificationService {
           importance: Importance.max,
         );
         await androidImplementation.createNotificationChannel(channel);
+        debugPrint('[NotificationService] Registered Android notification channel: $channelId');
       }
 
-      _isInitialized = true;
+      _isInitialized = initialized;
+      _lastError = null;
+      debugPrint('[NotificationService] Initialized successfully with icon "$_activeIconName"');
     } catch (e) {
+      _lastError = e.toString();
       developer.log('Failed to initialize NotificationService: $e');
+      debugPrint('[NotificationService] Initialization error: $e');
     }
   }
 
@@ -94,13 +136,25 @@ class NotificationService {
   Future<void> scheduleTaskNotification(Task task) async {
     if (!task.isNotificationEnabled || task.isCompleted) return;
 
+    if (!_isInitialized) {
+      await init();
+    }
+
     DateTime targetDateTime = task.fullDueDateTime;
     final now = DateTime.now();
 
-    // If one-time and deadline is in the past, skip scheduling
+    // Past / overdue handling for one-time reminders
     if (!task.isRecurring && targetDateTime.isBefore(now)) {
-      developer.log('Skipping notification for task "${task.title}": time is in the past.');
-      return;
+      final pastDuration = now.difference(targetDateTime);
+      // If reminder was set for the current minute or finished saving within the last 2 minutes,
+      // schedule it for immediate delivery in 5 seconds rather than dropping it silently.
+      if (pastDuration <= const Duration(minutes: 2)) {
+        targetDateTime = now.add(const Duration(seconds: 5));
+        debugPrint('[NotificationService] Adjusted near-current reminder "${task.title}" to fire in 5 seconds.');
+      } else {
+        debugPrint('[NotificationService] Skipping reminder "${task.title}": overdue by ${pastDuration.inMinutes} minutes.');
+        return;
+      }
     }
 
     // Determine matching components for recurring alarms and advance start time if in past
@@ -139,28 +193,32 @@ class NotificationService {
     try {
       final scheduledDate = tz.TZDateTime.from(targetDateTime, tz.local);
 
-      final androidDetails = AndroidNotificationDetails(
-        channelId,
-        channelName,
-        channelDescription: channelDescription,
-        importance: Importance.max,
-        priority: Priority.high,
-        icon: 'ic_notification',
-        styleInformation: BigTextStyleInformation(
-          task.description.isNotEmpty ? task.description : 'Your reminder is due now!',
-          contentTitle: task.title,
-          summaryText: task.isRecurring
-              ? "Priority: ${task.priority.label} • Repeat: ${task.recurrence.label}"
-              : "Priority: ${task.priority.label}",
-        ),
-      );
+      NotificationDetails buildDetails(String icon) {
+        final androidDetails = AndroidNotificationDetails(
+          channelId,
+          channelName,
+          channelDescription: channelDescription,
+          importance: Importance.max,
+          priority: Priority.high,
+          icon: icon,
+          styleInformation: BigTextStyleInformation(
+            task.description.isNotEmpty ? task.description : 'Your reminder is due now!',
+            contentTitle: task.title,
+            summaryText: task.isRecurring
+                ? "Priority: ${task.priority.label} • Repeat: ${task.recurrence.label}"
+                : "Priority: ${task.priority.label}",
+          ),
+        );
 
-      final notificationDetails = NotificationDetails(
-        android: androidDetails,
-        iOS: const DarwinNotificationDetails(),
-      );
+        return NotificationDetails(
+          android: androidDetails,
+          iOS: const DarwinNotificationDetails(),
+        );
+      }
 
-      // Attempt exact alarm scheduling; gracefully fallback to inexact if exact alarms are restricted
+      NotificationDetails notificationDetails = buildDetails(_activeIconName);
+
+      // Attempt exact alarm scheduling; gracefully fallback to inexact if restricted
       try {
         await _notificationsPlugin.zonedSchedule(
           task.notificationId,
@@ -176,9 +234,15 @@ class NotificationService {
           matchDateTimeComponents: matchDateTimeComponents,
           payload: task.id,
         );
-      } catch (exactScheduleError) {
-        developer.log(
-            'Exact alarm scheduling unavailable, falling back to inexact: $exactScheduleError');
+      } catch (scheduleError) {
+        // If primary icon caused failure, retry with launcher icon fallback
+        if (scheduleError.toString().contains('invalid_icon') && _activeIconName != '@mipmap/ic_launcher') {
+          debugPrint('[NotificationService] Retrying schedule with fallback icon @mipmap/ic_launcher');
+          _activeIconName = '@mipmap/ic_launcher';
+          notificationDetails = buildDetails(_activeIconName);
+        }
+
+        debugPrint('[NotificationService] Retrying with inexact scheduling: $scheduleError');
         await _notificationsPlugin.zonedSchedule(
           task.notificationId,
           task.title,
@@ -195,9 +259,22 @@ class NotificationService {
         );
       }
 
-      developer.log('Notification scheduled for "${task.title}" at $scheduledDate (ID: ${task.notificationId}, Repeat: ${task.recurrence.name})');
+      _lastError = null;
+      debugPrint('[NotificationService] Notification scheduled for "${task.title}" at $scheduledDate (ID: ${task.notificationId})');
     } catch (e) {
+      _lastError = e.toString();
       developer.log('Error scheduling notification for task "${task.title}": $e');
+      debugPrint('[NotificationService] Error scheduling notification: $e');
+    }
+  }
+
+  /// Internal query for pending requests
+  Future<List<PendingNotificationRequest>> _getPendingNotificationRequests() async {
+    try {
+      return await _notificationsPlugin.pendingNotificationRequests();
+    } catch (e) {
+      debugPrint('[NotificationService] Error querying pending requests: $e');
+      return [];
     }
   }
 
@@ -208,6 +285,7 @@ class NotificationService {
       developer.log('Cancelled notification with ID: $notificationId');
     } catch (e) {
       developer.log('Error cancelling notification: $e');
+      debugPrint('[NotificationService] Error cancelling notification: $e');
     }
   }
 
@@ -218,6 +296,7 @@ class NotificationService {
       developer.log('Cancelled all notifications.');
     } catch (e) {
       developer.log('Error cancelling all notifications: $e');
+      debugPrint('[NotificationService] Error cancelling all notifications: $e');
     }
   }
 }
