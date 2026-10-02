@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/constants/app_colors.dart';
 import '../models/task.dart';
+import '../providers/auth_provider.dart';
 import '../providers/task_provider.dart';
 import '../services/ai_reminder_service.dart';
 import '../widgets/ai_confirmation_sheet.dart';
@@ -91,6 +92,7 @@ class _HomeScreenState extends State<HomeScreen> {
             color: AppColors.primary,
             onPressed: () => _openAiAssistant(context),
           ),
+          const _AccountActionButton(),
           const SizedBox(width: 4),
         ],
       ),
@@ -365,3 +367,88 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+/// Displays user profile details and provides sign-out action in the app bar.
+class _AccountActionButton extends StatelessWidget {
+  const _AccountActionButton();
+
+  @override
+  Widget build(BuildContext context) {
+    AuthProvider? auth;
+    try {
+      auth = Provider.of<AuthProvider>(context);
+    } catch (_) {
+      auth = null;
+    }
+
+    if (auth == null) {
+      return const SizedBox.shrink();
+    }
+
+    final user = auth.currentUser;
+    final userName = (user?.name != null && user!.name.trim().isNotEmpty)
+        ? user.name.trim()
+        : 'User';
+    final userPhone =
+        (user?.phoneNumber != null && user!.phoneNumber.trim().isNotEmpty)
+            ? user.phoneNumber.trim()
+            : '';
+
+    return PopupMenuButton<String>(
+      key: const Key('home_account_menu_button'),
+      icon: const Icon(Icons.account_circle_outlined, color: AppColors.primary),
+      tooltip: 'Account',
+      onSelected: (value) async {
+        if (value == 'sign_out') {
+          await context.read<AuthProvider>().signOut();
+        }
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                userName,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  color: AppColors.textPrimaryLight,
+                ),
+              ),
+              if (userPhone.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  userPhone,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondaryLight,
+                  ),
+                ),
+              ],
+              const Divider(),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'sign_out',
+          child: Row(
+            children: [
+              Icon(Icons.logout, color: AppColors.error, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Sign Out',
+                style: TextStyle(
+                  color: AppColors.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
