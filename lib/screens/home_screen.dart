@@ -52,16 +52,13 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Row(
           children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(
-                Icons.alarm_on_rounded,
-                color: AppColors.primary,
-                size: 22,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                'assets/images/app_logo.png',
+                width: 36,
+                height: 36,
+                fit: BoxFit.contain,
               ),
             ),
             const SizedBox(width: 12),

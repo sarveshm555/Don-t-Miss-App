@@ -95,16 +95,13 @@ class _SignInScreenState extends State<SignInScreen> {
                 children: [
                   // App Icon & Header
                   Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.alarm_on_rounded,
-                        size: 48,
-                        color: AppColors.primary,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: Image.asset(
+                        'assets/images/app_logo.png',
+                        width: 80,
+                        height: 80,
+                        fit: BoxFit.contain,
                       ),
                     ),
                   ),

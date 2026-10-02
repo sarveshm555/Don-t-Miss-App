@@ -28,11 +28,26 @@ class AuthGate extends StatelessWidget {
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
         if (auth.isLoading) {
-          return const Scaffold(
+          return Scaffold(
             body: Center(
-              child: CircularProgressIndicator(
-                key: Key('auth_gate_loading_indicator'),
-                color: AppColors.primary,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(24),
+                    child: Image.asset(
+                      'assets/images/app_logo.png',
+                      width: 96,
+                      height: 96,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  const CircularProgressIndicator(
+                    key: Key('auth_gate_loading_indicator'),
+                    color: AppColors.primary,
+                  ),
+                ],
               ),
             ),
           );
