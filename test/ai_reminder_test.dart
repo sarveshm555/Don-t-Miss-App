@@ -165,12 +165,65 @@ void main() {
         () => service.parsePrompt('Remind me at 9 PM about interview', referenceTime: fixedRefTime),
         throwsA(isA<AiParsingException>()),
       );
+    });
 
-      // Missing time
-      expect(
-        () => service.parsePrompt('Remind me tomorrow about interview', referenceTime: fixedRefTime),
-        throwsA(isA<AiParsingException>()),
+    test('Default time applied when no time is specified (09:00 AM)', () async {
+      final draft = await service.parsePrompt(
+        'Remind me tomorrow about interview',
+        referenceTime: fixedRefTime,
       );
+      expect(draft.dueHour, 9);
+      expect(draft.dueMinute, 0);
+    });
+
+    test('Explicit times preserved exactly: 9 AM, 7:30 AM, 12 PM, 6:45 PM', () async {
+      final draft9am = await service.parsePrompt(
+        'Remind me tomorrow at 9 AM to send my resume to my ma\'am',
+        referenceTime: fixedRefTime,
+      );
+      expect(draft9am.dueHour, 9);
+      expect(draft9am.dueMinute, 0);
+
+      final draft730am = await service.parsePrompt(
+        'Remind me tomorrow at 7:30 AM to call doctor',
+        referenceTime: fixedRefTime,
+      );
+      expect(draft730am.dueHour, 7);
+      expect(draft730am.dueMinute, 30);
+
+      final draft12pm = await service.parsePrompt(
+        'Remind me tomorrow at 12 PM to join team lunch',
+        referenceTime: fixedRefTime,
+      );
+      expect(draft12pm.dueHour, 12);
+      expect(draft12pm.dueMinute, 0);
+
+      final draft645pm = await service.parsePrompt(
+        'Remind me tomorrow at 6:45 PM to review pull request',
+        referenceTime: fixedRefTime,
+      );
+      expect(draft645pm.dueHour, 18);
+      expect(draft645pm.dueMinute, 45);
+    });
+
+    test('Title and description separation with secondary clauses and instructions', () async {
+      final draft1 = await service.parsePrompt(
+        'Tomorrow at 9 AM, send my resume to my ma\'am and mention my project experience',
+        referenceTime: fixedRefTime,
+      );
+      expect(draft1.title, 'Send my resume to my ma\'am');
+      expect(draft1.description, 'Mention my project experience');
+      expect(draft1.dueHour, 9);
+      expect(draft1.dueMinute, 0);
+
+      final draft2 = await service.parsePrompt(
+        'Remind me tomorrow at 9 AM to send my resume to my ma\'am and mention my project experience',
+        referenceTime: fixedRefTime,
+      );
+      expect(draft2.title, 'Send my resume to my ma\'am');
+      expect(draft2.description, 'Mention my project experience');
+      expect(draft2.dueHour, 9);
+      expect(draft2.dueMinute, 0);
     });
 
     test('Raw prompt preservation in draft', () async {

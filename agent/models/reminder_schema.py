@@ -2,6 +2,7 @@ from typing import Optional, Literal, List
 from pydantic import BaseModel, Field
 
 class ReminderDraft(BaseModel):
+    id: Optional[str] = Field(None, description="Optional client-generated ID for consistent local/cloud tracking")
     title: str = Field(..., description="Short, descriptive title for the reminder")
     description: Optional[str] = Field(None, description="Optional extra details or context")
     dueDate: Optional[str] = Field(None, description="Due date in ISO format YYYY-MM-DD")
@@ -24,10 +25,27 @@ class AgentRequest(BaseModel):
     prompt: str = Field(..., description="Natural language reminder request from user")
     current_date: Optional[str] = Field(None, description="Current local date in YYYY-MM-DD for relative time resolution")
     current_time: Optional[str] = Field(None, description="Current local time in HH:MM")
+    timezone: Optional[str] = Field("Asia/Kolkata", description="User configured timezone, default Asia/Kolkata")
 
 class AgentResponse(BaseModel):
     success: bool
     proposal: Optional[ReminderProposal] = None
+    proposals: List[ReminderProposal] = Field(default_factory=list, description="All parsed reminder proposals")
+    message: Optional[str] = None
+    error: Optional[str] = None
+    clarification_needed: Optional[str] = Field(None, description="Question asked if prompt is ambiguous or details are missing")
+
+class ReminderPlanRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Natural language prompt with one or more reminder requests")
+    current_date: Optional[str] = Field(None, description="Current local date in YYYY-MM-DD")
+    current_time: Optional[str] = Field(None, description="Current local time in HH:MM")
+    timezone: Optional[str] = Field("Asia/Kolkata", description="User configured timezone, default Asia/Kolkata")
+
+class ReminderPlanResponse(BaseModel):
+    success: bool
+    reminders: List[ReminderDraft] = Field(default_factory=list, description="Extracted independent reminder drafts")
+    raw_prompt: str = Field(..., description="Original user prompt")
+    clarification_needed: Optional[str] = Field(None, description="Clarification question if date/time or details are ambiguous")
     message: Optional[str] = None
     error: Optional[str] = None
 
@@ -91,3 +109,46 @@ class ReminderResponse(BaseModel):
     channels: List[str] = Field(default_factory=lambda: ["local"])
     created_at: str
     updated_at: str
+
+class ReminderSchedulingStatus(BaseModel):
+    reminder_id: str = Field(..., description="ID of the associated reminder")
+    channel: str = Field(..., description="Delivery channel ('local' or 'whatsapp')")
+    status: str = Field(..., description="Status ('READY_FOR_DEVICE_SCHEDULE', 'SCHEDULED', 'DISPATCHED', 'SKIPPED', 'SKIPPED_UNVERIFIED', 'FAILED')")
+    delivered: bool = Field(False, description="True if delivery was completed and confirmed right now")
+    detail: Optional[str] = Field(None, description="Detailed status or failure message")
+
+class BatchFailureItem(BaseModel):
+    reminder_id: Optional[str] = Field(None, description="Associated reminder ID if available")
+    title: Optional[str] = Field(None, description="Title of the reminder that experienced an issue")
+    reason: str = Field(..., description="Human-readable reason for the failure or warning")
+    action_required: Optional[str] = Field(None, description="User action required to resolve this issue")
+
+class ReminderBatchRequest(BaseModel):
+    reminders: List[ReminderDraft] = Field(..., description="List of validated reminder drafts explicitly approved by the user")
+    idempotency_key: Optional[str] = Field(None, description="Client-supplied key to prevent duplicate creation on retry")
+
+class ReminderBatchResponse(BaseModel):
+    success: bool = Field(..., description="Overall success status of the batch creation")
+    status: str = Field(..., description="Batch lifecycle status ('CONFIRMED', 'ALREADY_PROCESSED', 'FAILED')")
+    total_requested: int = Field(..., description="Total number of reminders requested in the batch")
+    total_created: int = Field(..., description="Total number of reminders persisted in this run")
+    created_reminder_ids: List[str] = Field(default_factory=list, description="IDs of all created/persisted reminders")
+    reminders: List[ReminderResponse] = Field(default_factory=list, description="Full persisted reminder objects")
+    scheduling_status: List[ReminderSchedulingStatus] = Field(default_factory=list, description="Per-channel scheduling outcomes")
+    failures: List[BatchFailureItem] = Field(default_factory=list, description="Non-fatal warnings or issues requiring user attention")
+    idempotency_key: Optional[str] = Field(None, description="Echoed idempotency key")
+    message: str = Field(..., description="Summary status message")
+
+class VoiceTranscribeRequest(BaseModel):
+    audio_base64: str = Field(..., description="Base64 encoded audio bytes")
+    filename: Optional[str] = Field("audio.m4a", description="Original filename with extension (e.g. audio.m4a, voice.mp3)")
+    language: Optional[str] = Field(None, description="Optional ISO-639-1 language code hint (e.g. 'en')")
+
+class VoiceTranscribeResponse(BaseModel):
+    success: bool = Field(..., description="Whether transcription succeeded")
+    text: str = Field("", description="Transcribed natural language text")
+    language: Optional[str] = Field(None, description="Detected or specified language")
+    duration_seconds: Optional[float] = Field(None, description="Duration in seconds if available")
+    filename: Optional[str] = Field(None, description="Filename of processed audio")
+    message: Optional[str] = Field(None, description="Status or guidance message")
+    error: Optional[str] = Field(None, description="Error detail if transcription failed")

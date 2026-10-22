@@ -1,26 +1,41 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../core/constants/app_colors.dart';
 import '../core/utils/date_time_utils.dart';
 import '../models/ai_reminder_draft.dart';
+import '../models/priority.dart';
 import '../models/recurrence.dart';
 import '../providers/auth_provider.dart';
 import '../providers/task_provider.dart';
 import '../screens/add_edit_task_screen.dart';
 import '../services/action_dispatch_service.dart';
 import '../services/ai_reminder_service.dart';
+import '../services/voice_recording_service.dart';
 import 'priority_badge.dart';
 
-/// Modal bottom sheet allowing users to describe reminders in natural language,
-/// preview the extracted structured fields, and explicitly confirm or edit before saving.
+/// States representing the voice interaction workflow.
+enum VoiceState {
+  idle,
+  recording,
+  transcribing,
+  transcriptionReady,
+  error,
+}
+
+/// Modal bottom sheet allowing users to describe reminders in natural language
+/// or via voice recording, preview one or multiple extracted structured drafts,
+/// edit or remove individual reminders, and confirm them to be saved and scheduled.
 class AiConfirmationSheet extends StatefulWidget {
   final AiReminderService aiService;
   final ActionDispatchService? actionDispatchService;
+  final VoiceRecordingService? voiceRecordingService;
 
   const AiConfirmationSheet({
     super.key,
     this.aiService = const LocalAiReminderService(),
     this.actionDispatchService,
+    this.voiceRecordingService,
   });
 
   /// Static helper to display the sheet from any screen.
@@ -28,6 +43,7 @@ class AiConfirmationSheet extends StatefulWidget {
     BuildContext context, {
     AiReminderService? aiService,
     ActionDispatchService? actionDispatchService,
+    VoiceRecordingService? voiceRecordingService,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -42,6 +58,7 @@ class AiConfirmationSheet extends StatefulWidget {
         child: AiConfirmationSheet(
           aiService: aiService ?? const LocalAiReminderService(),
           actionDispatchService: actionDispatchService,
+          voiceRecordingService: voiceRecordingService,
         ),
       ),
     );
@@ -53,21 +70,154 @@ class AiConfirmationSheet extends StatefulWidget {
 
 class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
   late final TextEditingController _promptController;
+  late final VoiceRecordingService _voiceRecorder;
+  bool _ownsVoiceRecorder = false;
+
   bool _isProcessing = false;
   bool _isConfirming = false;
+  bool _isRecording = false;
+  VoiceState _voiceState = VoiceState.idle;
+  Duration _recordingDuration = Duration.zero;
+  StreamSubscription<Duration>? _durationSub;
+
   String? _errorMessage;
-  AiReminderDraft? _draft;
+  List<AiReminderDraft> _drafts = [];
+  final Set<String> _selectedDraftIds = {};
+
+  AiReminderDraft? get _singleDraft =>
+      _drafts.length == 1 ? _drafts.first : null;
 
   @override
   void initState() {
     super.initState();
     _promptController = TextEditingController();
+    if (widget.voiceRecordingService != null) {
+      _voiceRecorder = widget.voiceRecordingService!;
+      _ownsVoiceRecorder = false;
+    } else {
+      _voiceRecorder = AppVoiceRecordingService();
+      _ownsVoiceRecorder = true;
+    }
   }
 
   @override
   void dispose() {
+    _durationSub?.cancel();
     _promptController.dispose();
+    if (_ownsVoiceRecorder) {
+      _voiceRecorder.dispose();
+    }
     super.dispose();
+  }
+
+  Future<void> _startVoiceRecording() async {
+    if (_voiceState == VoiceState.recording ||
+        _voiceState == VoiceState.transcribing ||
+        _isProcessing) {
+      return;
+    }
+    setState(() {
+      _errorMessage = null;
+      _voiceState = VoiceState.idle;
+    });
+    try {
+      final hasPerm = await _voiceRecorder.hasPermission();
+      if (!hasPerm) {
+        setState(() {
+          _voiceState = VoiceState.error;
+          _errorMessage =
+              'Microphone access is required for voice input. Please grant microphone permission.';
+        });
+        return;
+      }
+
+      await _voiceRecorder.startRecording();
+      _durationSub?.cancel();
+      _durationSub = _voiceRecorder.durationStream.listen((duration) {
+        if (mounted) {
+          setState(() => _recordingDuration = duration);
+        }
+      });
+
+      setState(() {
+        _isRecording = true;
+        _voiceState = VoiceState.recording;
+        _recordingDuration = Duration.zero;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _voiceState = VoiceState.error;
+          _errorMessage = 'Could not start voice recording: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _cancelVoiceRecording() async {
+    _durationSub?.cancel();
+    await _voiceRecorder.cancelRecording();
+    if (mounted) {
+      setState(() {
+        _isRecording = false;
+        _voiceState = VoiceState.idle;
+        _recordingDuration = Duration.zero;
+      });
+    }
+  }
+
+  Future<void> _stopAndTranscribeVoiceRecording() async {
+    if (_voiceState == VoiceState.transcribing) return;
+    _durationSub?.cancel();
+    setState(() {
+      _isRecording = false;
+      _isProcessing = true;
+      _voiceState = VoiceState.transcribing;
+      _errorMessage = null;
+    });
+
+    try {
+      AuthProvider? auth;
+      try {
+        auth = Provider.of<AuthProvider>(context, listen: false);
+      } catch (_) {}
+
+      final audioBytes = await _voiceRecorder.stopRecording();
+      if (!mounted) return;
+      if (audioBytes == null || audioBytes.isEmpty) {
+        setState(() {
+          _isProcessing = false;
+          _voiceState = VoiceState.error;
+          _errorMessage = 'No audio recorded. Please try again.';
+        });
+        return;
+      }
+
+      final transcribedText = await widget.aiService.transcribeAudio(
+        audioBytes,
+        filename: _voiceRecorder.recordedFilename,
+        language: 'en',
+        authToken: auth?.token,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _promptController.text = transcribedText;
+        _isProcessing = false;
+        _voiceState = VoiceState.transcriptionReady;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _voiceState = VoiceState.error;
+          _errorMessage = e is AiParsingException
+              ? e.message
+              : 'Voice transcription error: $e';
+        });
+      }
+    }
   }
 
   Future<void> _generateDraft() async {
@@ -85,10 +235,22 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     });
 
     try {
-      final draft = await widget.aiService.parsePrompt(prompt);
+      AuthProvider? auth;
+      try {
+        auth = Provider.of<AuthProvider>(context, listen: false);
+      } catch (_) {}
+
+      final drafts = await widget.aiService.parseMultiPrompt(
+        prompt,
+        authToken: auth?.token,
+      );
+
       if (!mounted) return;
       setState(() {
-        _draft = draft;
+        _drafts = List.from(drafts);
+        _selectedDraftIds
+          ..clear()
+          ..addAll(drafts.map((d) => d.draftId));
         _isProcessing = false;
       });
     } on AiParsingException catch (e) {
@@ -106,14 +268,14 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     }
   }
 
-  Future<void> _confirmAndAdd() async {
-    if (_draft == null || _isConfirming) return;
+  Future<void> _confirmAndAddSingle() async {
+    final draft = _singleDraft;
+    if (draft == null || _isConfirming) return;
 
     setState(() {
       _isConfirming = true;
     });
 
-    final draft = _draft!;
     final task = draft.toTask();
     final provider = Provider.of<TaskProvider>(context, listen: false);
 
@@ -128,7 +290,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     // 1. Local persistence and notification scheduling
     await provider.addTask(task);
 
-    // 2. Cloud persistence and external action routing for all confirmed AI reminders
+    // 2. Cloud persistence and action dispatch
     final dispatchService = widget.actionDispatchService ??
         const BackendActionDispatchService();
 
@@ -184,9 +346,76 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     }
   }
 
+  Future<void> _confirmSelectedBatch() async {
+    if (_selectedDraftIds.isEmpty || _isConfirming) return;
+
+    setState(() {
+      _isConfirming = true;
+    });
+
+    final selectedDrafts = _drafts
+        .where((d) =>
+            _selectedDraftIds.contains(d.draftId) ||
+            (d.id != null && _selectedDraftIds.contains(d.id)))
+        .toList();
+    final tasks = selectedDrafts.map((d) => d.toTask()).toList();
+    final provider = Provider.of<TaskProvider>(context, listen: false);
+
+    AuthProvider? auth;
+    try {
+      auth = Provider.of<AuthProvider>(context, listen: false);
+    } catch (_) {}
+
+    final authToken = auth?.token;
+
+    // 1. Local batch persistence & notification scheduling
+    await provider.addTasksBatch(tasks);
+
+    // 2. Cloud persistence
+    final dispatchService = widget.actionDispatchService ??
+        const BackendActionDispatchService();
+
+    BatchConfirmResult? batchResult;
+    if (authToken != null && authToken.isNotEmpty) {
+      try {
+        batchResult = await dispatchService.dispatchBatchConfirmedActions(
+          drafts: selectedDrafts,
+          authToken: authToken,
+        );
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    final scheduledCount = tasks.length;
+    final cloudCount = batchResult?.createdReminderIds.length ?? 0;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                cloudCount > 0
+                    ? 'Confirmed & scheduled $scheduledCount reminders ($cloudCount synced to cloud).'
+                    : 'Confirmed & scheduled $scheduledCount reminders locally.',
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: AppColors.success,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   void _editInForm() {
-    if (_draft == null || _isConfirming) return;
-    final draft = _draft!;
+    final draft = _singleDraft;
+    if (draft == null || _isConfirming) return;
     final task = draft.toTask();
 
     Navigator.of(context).pop();
@@ -201,13 +430,165 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     );
   }
 
-  void _resetDraft() {
+  void _resetDrafts() {
     if (_isConfirming) return;
     setState(() {
-      _draft = null;
+      _drafts.clear();
+      _selectedDraftIds.clear();
       _errorMessage = null;
       _isConfirming = false;
     });
+  }
+
+  void _toggleSelectAll() {
+    setState(() {
+      if (_selectedDraftIds.length == _drafts.length) {
+        _selectedDraftIds.clear();
+      } else {
+        _selectedDraftIds
+          ..clear()
+          ..addAll(_drafts.map((d) => d.draftId));
+      }
+    });
+  }
+
+  void _removeDraft(String draftId) {
+    setState(() {
+      _drafts.removeWhere((d) => d.draftId == draftId);
+      _selectedDraftIds.remove(draftId);
+    });
+  }
+
+  Future<void> _editIndividualDraft(AiReminderDraft draft) async {
+    final titleCtrl = TextEditingController(text: draft.title);
+    final descriptionCtrl = TextEditingController(text: draft.description);
+    DateTime dueDate = draft.dueDate;
+    TimeOfDay dueTime =
+        TimeOfDay(hour: draft.dueHour, minute: draft.dueMinute);
+    Priority priority = draft.priority;
+
+    final updated = await showDialog<AiReminderDraft>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Edit Reminder', style: TextStyle(fontSize: 18)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Title',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descriptionCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Description / Context (Optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.calendar_today_rounded),
+                  title: Text(DateTimeUtils.formatDate(dueDate)),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: ctx,
+                      initialDate: dueDate,
+                      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                      lastDate: DateTime.now().add(const Duration(days: 3650)),
+                    );
+                    if (picked != null) {
+                      setDialogState(() => dueDate = picked);
+                    }
+                  },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.access_time_rounded),
+                  title: Text(dueTime.format(ctx)),
+                  onTap: () async {
+                    final picked = await showTimePicker(
+                      context: ctx,
+                      initialTime: dueTime,
+                    );
+                    if (picked != null) {
+                      setDialogState(() => dueTime = picked);
+                    }
+                  },
+                ),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<Priority>(
+                  initialValue: priority,
+                  decoration: const InputDecoration(
+                    labelText: 'Priority',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: Priority.values.map((p) {
+                    return DropdownMenuItem(
+                      value: p,
+                      child: Text(p.label),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setDialogState(() => priority = val);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                final trimmed = titleCtrl.text.trim();
+                if (trimmed.isEmpty) return;
+                Navigator.pop(
+                  ctx,
+                  draft.copyWith(
+                    title: trimmed,
+                    description: descriptionCtrl.text.trim(),
+                    dueDate: dueDate,
+                    dueHour: dueTime.hour,
+                    dueMinute: dueTime.minute,
+                    priority: priority,
+                  ),
+                );
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (updated != null && mounted) {
+      setState(() {
+        final index = _drafts.indexWhere((d) =>
+            (draft.id != null && d.id == draft.id) || d.draftId == draft.draftId);
+        if (index != -1) {
+          _drafts[index] = updated;
+        }
+      });
+    }
+  }
+
+  String _formatTimer(Duration d) {
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
   @override
@@ -262,7 +643,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                         ),
                       ),
                       Text(
-                        'Type naturally; AI extracts schedule, priority & details.',
+                        'Type or speak multi-task reminders; AI extracts and organizes each.',
                         style: TextStyle(
                           fontSize: 12,
                           color: AppColors.textSecondaryLight,
@@ -275,40 +656,146 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
             ),
             const SizedBox(height: 20),
 
-            if (_draft == null) ...[
-              // Prompt Input Field
-              TextField(
-                key: const Key('ai_prompt_input'),
-                controller: _promptController,
-                maxLines: 3,
-                minLines: 2,
-                decoration: InputDecoration(
-                  hintText:
-                      'e.g. Remind me tomorrow at 9 PM about my Amazon interview because I need to prepare questions.',
-                  border: OutlineInputBorder(
+            if (_drafts.isEmpty) ...[
+              // Prompt Input Field with Voice Controls
+              if (_voiceState == VoiceState.recording || _isRecording) ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.priorityHighBg,
                     borderRadius: BorderRadius.circular(16),
-                  ),
-                  contentPadding: const EdgeInsets.all(16),
-                  suffixIcon: IconButton(
-                    tooltip: 'Voice Input (English)',
-                    icon: const Icon(
-                      Icons.mic_none_rounded,
-                      color: AppColors.primary,
+                    border: Border.all(
+                      color: AppColors.error.withValues(alpha: 0.5),
+                      width: 1.5,
                     ),
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'English speech-to-text input prepared. Connects directly to prompt field.',
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                          duration: Duration(seconds: 2),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.fiber_manual_record_rounded,
+                        color: AppColors.error,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Recording... ${_formatTimer(_recordingDuration)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.error,
                         ),
-                      );
-                    },
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        key: const Key('cancel_recording_button'),
+                        tooltip: 'Cancel Recording',
+                        icon: const Icon(Icons.close_rounded, color: Colors.grey),
+                        onPressed: _cancelVoiceRecording,
+                      ),
+                      IconButton(
+                        key: const Key('stop_recording_button'),
+                        tooltip: 'Stop & Transcribe',
+                        icon: const Icon(
+                          Icons.check_circle_rounded,
+                          color: AppColors.primary,
+                          size: 28,
+                        ),
+                        onPressed: _stopAndTranscribeVoiceRecording,
+                      ),
+                    ],
                   ),
                 ),
-              ),
+              ] else if (_voiceState == VoiceState.transcribing) ...[
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.4),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: const Row(
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Transcribing your audio with AI...',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                if (_voiceState == VoiceState.transcriptionReady) ...[
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.mic_none_rounded, color: AppColors.success, size: 16),
+                        SizedBox(width: 6),
+                        Text(
+                          'Voice transcribed! You can edit or generate drafts.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.success,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                TextField(
+                  key: const Key('ai_prompt_input'),
+                  controller: _promptController,
+                  maxLines: 3,
+                  minLines: 2,
+                  onChanged: (_) {
+                    if (_voiceState != VoiceState.idle) {
+                      setState(() => _voiceState = VoiceState.idle);
+                    }
+                  },
+                  decoration: InputDecoration(
+                    hintText:
+                        'e.g. Remind me tomorrow at 9 PM about Amazon interview, and grocery shopping Saturday at 10 AM',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    contentPadding: const EdgeInsets.all(16),
+                    suffixIcon: IconButton(
+                      key: const Key('voice_record_button'),
+                      tooltip: 'Voice Input (English)',
+                      icon: const Icon(
+                        Icons.mic_none_rounded,
+                        color: AppColors.primary,
+                      ),
+                      onPressed: _startVoiceRecording,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
 
               // Example Prompt Suggestions
@@ -323,7 +810,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                     'Doctor appointment today at 10:30 AM',
                   ),
                   _buildPromptChip(
-                    'Pay electric bill tomorrow at 15:00',
+                    'Gemini hackathon today 10 AM and friends birthday tomorrow 9 AM',
                   ),
                 ],
               ),
@@ -332,7 +819,8 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
               // Error Message
               if (_errorMessage != null) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   decoration: BoxDecoration(
                     color: AppColors.priorityHighBg,
                     borderRadius: BorderRadius.circular(8),
@@ -342,7 +830,8 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.info_outline, color: AppColors.error, size: 16),
+                      const Icon(Icons.info_outline,
+                          color: AppColors.error, size: 16),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -361,7 +850,12 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
 
               // Generate Button
               ElevatedButton.icon(
-                onPressed: _isProcessing ? null : _generateDraft,
+                key: const Key('generate_draft_button'),
+                onPressed: (_isProcessing ||
+                        _voiceState == VoiceState.recording ||
+                        _voiceState == VoiceState.transcribing)
+                    ? null
+                    : _generateDraft,
                 icon: _isProcessing
                     ? const SizedBox(
                         width: 18,
@@ -377,14 +871,14 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                   style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
-            ] else ...[
-              // Structured Reminder Preview Card
-              _buildDraftPreview(isDark),
+            ] else if (_drafts.length == 1) ...[
+              // Single Reminder Draft View (Exact backward compatibility)
+              _buildDraftPreview(_drafts.first, isDark),
               const SizedBox(height: 20),
 
               // Confirm & Add (Primary Action)
               ElevatedButton.icon(
-                onPressed: _isConfirming ? null : _confirmAndAdd,
+                onPressed: _isConfirming ? null : _confirmAndAddSingle,
                 icon: _isConfirming
                     ? const SizedBox(
                         width: 18,
@@ -415,12 +909,78 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: TextButton.icon(
-                      onPressed: _isConfirming ? null : _resetDraft,
+                      onPressed: _isConfirming ? null : _resetDrafts,
                       icon: const Icon(Icons.refresh_rounded, size: 18),
                       label: const Text('Try Another'),
                     ),
                   ),
                 ],
+              ),
+            ] else ...[
+              // Multi-Reminder Batch Checklist View
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Extracted Reminders (${_selectedDraftIds.length}/${_drafts.length} selected)',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _toggleSelectAll,
+                    child: Text(
+                      _selectedDraftIds.length == _drafts.length
+                          ? 'Deselect All'
+                          : 'Select All',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              // List of extracted reminder cards
+              ..._drafts.map((draft) {
+                final isSelected = _selectedDraftIds.contains(draft.id);
+                return _buildMultiDraftCard(draft, isSelected, isDark);
+              }),
+
+              const SizedBox(height: 20),
+
+              // Batch Confirm Button
+              ElevatedButton.icon(
+                key: const Key('confirm_batch_button'),
+                onPressed: _selectedDraftIds.isEmpty || _isConfirming
+                    ? null
+                    : _confirmSelectedBatch,
+                icon: _isConfirming
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check_circle_outline_rounded, size: 18),
+                label: Text(
+                  _isConfirming
+                      ? 'Confirming Batch...'
+                      : 'Confirm Selected (${_selectedDraftIds.length})',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(height: 10),
+
+              // Discard / Reset
+              Center(
+                child: TextButton.icon(
+                  onPressed: _isConfirming ? null : _resetDrafts,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Discard & Try Another'),
+                ),
               ),
             ],
           ],
@@ -442,8 +1002,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     );
   }
 
-  Widget _buildDraftPreview(bool isDark) {
-    final draft = _draft!;
+  Widget _buildDraftPreview(AiReminderDraft draft, bool isDark) {
     final dateStr = DateTimeUtils.formatDate(draft.dueDate);
     final timeStr = DateTimeUtils.formatTime(draft.dueHour, draft.dueMinute);
 
@@ -465,7 +1024,8 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
               if (draft.recurrence != Recurrence.none) ...[
                 const SizedBox(width: 8),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
                     color: AppColors.secondary.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(12),
@@ -484,34 +1044,6 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
                           color: AppColors.secondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              if (draft.channels.contains('whatsapp')) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF25D366).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(
-                        Icons.chat_bubble_outline_rounded,
-                        size: 12,
-                        color: Color(0xFF25D366),
-                      ),
-                      SizedBox(width: 4),
-                      Text(
-                        'WhatsApp',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF25D366),
                         ),
                       ),
                     ],
@@ -593,6 +1125,105 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMultiDraftCard(
+      AiReminderDraft draft, bool isSelected, bool isDark) {
+    final dateStr = DateTimeUtils.formatDate(draft.dueDate);
+    final timeStr = DateTimeUtils.formatTime(draft.dueHour, draft.dueMinute);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.surfaceDark : AppColors.backgroundLight,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isSelected
+              ? AppColors.primary
+              : (isDark ? AppColors.borderDark : AppColors.borderLight),
+          width: isSelected ? 1.5 : 1.0,
+        ),
+      ),
+      child: Column(
+        children: [
+          ListTile(
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            leading: Checkbox(
+              value: isSelected,
+              onChanged: (val) {
+                setState(() {
+                  if (val == true) {
+                    _selectedDraftIds.add(draft.draftId);
+                  } else {
+                    _selectedDraftIds.remove(draft.draftId);
+                  }
+                });
+              },
+            ),
+            title: Text(
+              draft.title,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                decoration: isSelected ? null : TextDecoration.lineThrough,
+              ),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (draft.description.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    draft.description,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark
+                          ? AppColors.textSecondaryDark
+                          : AppColors.textSecondaryLight,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    PriorityBadge(priority: draft.priority),
+                    const SizedBox(width: 8),
+                    Icon(
+                      Icons.alarm_rounded,
+                      size: 14,
+                      color: isDark
+                          ? AppColors.textSecondaryDark
+                          : AppColors.textSecondaryLight,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$dateStr $timeStr',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  tooltip: 'Edit reminder',
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  onPressed: () => _editIndividualDraft(draft),
+                ),
+                IconButton(
+                  tooltip: 'Remove reminder',
+                  icon: const Icon(Icons.delete_outline,
+                      size: 18, color: AppColors.error),
+                  onPressed: () => _removeDraft(draft.draftId),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );

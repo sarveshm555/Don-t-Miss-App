@@ -44,3 +44,5 @@ android/key.properties
 .env.*
 
 .vercel
+*.db
+.metadata

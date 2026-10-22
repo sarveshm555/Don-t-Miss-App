@@ -55,7 +55,9 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
   @override
   void initState() {
     super.initState();
-    final task = widget.taskToEdit ?? widget.initialDraft;
+    final task = widget.taskToEdit ??
+        widget.initialDraft ??
+        widget.initialAiDraft?.toTask();
 
     _titleController = TextEditingController(text: task?.title ?? '');
     _descriptionController =

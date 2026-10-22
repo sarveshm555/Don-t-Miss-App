@@ -209,6 +209,29 @@ class TaskProvider extends ChangeNotifier {
     }
   }
 
+  /// Adds multiple tasks in batch locally, persists to repository, and schedules notifications.
+  Future<void> addTasksBatch(List<Task> tasks) async {
+    if (tasks.isEmpty) return;
+    for (final task in tasks) {
+      _tasks.removeWhere((t) => t.id == task.id);
+      _tasks.add(task);
+    }
+    _sortTasks();
+    notifyListeners();
+
+    await _repository.saveAllTasks(_tasks);
+
+    for (final task in tasks) {
+      if (task.isNotificationEnabled && !task.isCompleted) {
+        try {
+          await _notificationService.scheduleTaskNotification(task);
+        } catch (e) {
+          debugPrint('Failed to schedule local notification for "${task.title}": $e');
+        }
+      }
+    }
+  }
+
   /// Updates an existing task locally and attempts cloud update.
   Future<void> updateTask(Task updatedTask) async {
     final index = _tasks.indexWhere((t) => t.id == updatedTask.id);

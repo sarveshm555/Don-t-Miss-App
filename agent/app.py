@@ -1,14 +1,23 @@
 import os
 import uuid
+import base64
 import logging
 from datetime import datetime, date, timezone
-from fastapi import FastAPI, HTTPException, Depends
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 from agent.models.reminder_schema import (
     AgentRequest,
     AgentResponse,
     ActionConfirmRequest,
     ActionConfirmResponse,
+    ReminderPlanRequest,
+    ReminderPlanResponse,
+    ReminderBatchRequest,
+    ReminderBatchResponse,
+    VoiceTranscribeRequest,
+    VoiceTranscribeResponse,
 )
 from agent.reminder_agent import ReminderAgent
 from agent.services.action_router import ActionRouter
@@ -66,6 +75,10 @@ app.add_middleware(
 
 agent = ReminderAgent()
 action_router = ActionRouter()
+from agent.services.batch_reminder_service import BatchReminderService
+batch_reminder_service = BatchReminderService()
+from agent.services.voice_transcription_service import VoiceTranscriptionService
+voice_service = VoiceTranscriptionService()
 
 # Alias for backward compatibility
 _persist_confirmed_reminder_to_db = persist_confirmed_reminder_to_db
@@ -93,8 +106,91 @@ async def create_reminder_proposal(
         prompt=request.prompt,
         current_date=request.current_date,
         current_time=request.current_time,
+        timezone=request.timezone,
     )
     return response
+
+@app.post("/agent/reminders/plan", response_model=ReminderPlanResponse)
+async def create_reminder_plan(
+    request: ReminderPlanRequest,
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """Multi-reminder planning endpoint.
+
+    Extracts one or multiple structured reminder drafts from a single natural-language prompt.
+    Validates all dates, times, and fields under the user's configured timezone (default: Asia/Kolkata).
+    """
+    if not request.prompt or not request.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
+
+    response = await agent.process_plan_async(request)
+    return response
+
+@app.post("/agent/reminders/batch", response_model=ReminderBatchResponse)
+async def create_reminder_batch(
+    request: ReminderBatchRequest,
+    idempotency_header: Optional[str] = Header(None, alias="Idempotency-Key"),
+    current_user: User = Depends(get_current_user_required),
+    db: Session = Depends(get_db_session),
+):
+    """Batch confirmation and creation endpoint.
+
+    Atomically validates, persists, and schedules multiple user-approved reminder drafts.
+    Strictly derives user ID from authenticated JWT context and rolls back on any DB failure.
+    """
+    effective_idempotency = idempotency_header or request.idempotency_key
+    return await batch_reminder_service.process_batch(
+        db=db,
+        current_user=current_user,
+        request=request,
+        idempotency_key=effective_idempotency,
+    )
+
+@app.post("/agent/voice/transcribe", response_model=VoiceTranscribeResponse)
+async def transcribe_voice(
+    request: Request,
+    current_user: User | None = Depends(get_current_user_optional),
+):
+    """Voice transcription endpoint using backend OpenAI Whisper model.
+
+    Accepts uploaded audio either via multipart/form-data ('file' field)
+    or via JSON body with 'audio_base64' and 'filename'.
+    Validates file formats (m4a, mp3, wav, webm, etc.), enforces size limits (25 MB),
+    and strictly protects OpenAI credentials on backend.
+    """
+    content_type = (request.headers.get("content-type") or "").lower()
+    filename = "audio.m4a"
+    audio_bytes = b""
+    language = None
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        uploaded_file = form.get("file")
+        if not uploaded_file:
+            raise HTTPException(status_code=400, detail="Missing 'file' in multipart upload.")
+        filename = getattr(uploaded_file, "filename", "audio.m4a") or "audio.m4a"
+        audio_bytes = await uploaded_file.read()
+        language = form.get("language")
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid request payload. Expected JSON or multipart/form-data.")
+        audio_b64 = body.get("audio_base64")
+        if not audio_b64 or not str(audio_b64).strip():
+            raise HTTPException(status_code=400, detail="Missing 'audio_base64' in request body.")
+        filename = body.get("filename", "audio.m4a") or "audio.m4a"
+        language = body.get("language")
+        try:
+            audio_bytes = base64.b64decode(audio_b64)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 encoding for audio.")
+
+    return await voice_service.transcribe(
+        audio_bytes=audio_bytes,
+        filename=filename,
+        language=language,
+    )
 
 @app.post("/action/confirm", response_model=ActionConfirmResponse)
 async def confirm_and_route_action(

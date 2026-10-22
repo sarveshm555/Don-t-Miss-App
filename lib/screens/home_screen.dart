@@ -86,10 +86,38 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _handleConfirmAiBatchDrafts(BuildContext context,
+      List<AiReminderDraft> drafts, TaskProvider provider) async {
+    final auth = context.read<AuthProvider>();
+    final tasks = drafts.map((d) => d.toTask()).toList();
+    await provider.addTasksBatch(tasks);
+
+    if (widget.actionDispatchService != null && auth.token != null) {
+      try {
+        await widget.actionDispatchService!.dispatchBatchConfirmedActions(
+          drafts: drafts,
+          authToken: auth.token!,
+        );
+      } catch (_) {}
+    }
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              '${tasks.length} reminders confirmed & scheduled successfully.'),
+          backgroundColor: AppColors.primary,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   void _handleEditAiDraft(BuildContext context, AiReminderDraft draft) {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => AddEditTaskScreen(
+          initialDraft: draft.toTask(),
           initialAiDraft: draft,
           actionDispatchService: widget.actionDispatchService,
         ),
@@ -342,6 +370,8 @@ class _HomeScreenState extends State<HomeScreen> {
           aiService: widget.aiService ?? const LocalAiReminderService(),
           onConfirmDraft: (draft) =>
               _handleConfirmAiDraft(context, draft, provider),
+          onConfirmBatchDrafts: (drafts) =>
+              _handleConfirmAiBatchDrafts(context, drafts, provider),
           onEditDraft: (draft) => _handleEditAiDraft(context, draft),
         ),
         const SizedBox(height: 24),
@@ -1235,6 +1265,7 @@ class _HomeScreenState extends State<HomeScreen> {
     AiConfirmationSheet.show(
       context,
       aiService: widget.aiService,
+      actionDispatchService: widget.actionDispatchService,
     );
   }
 }

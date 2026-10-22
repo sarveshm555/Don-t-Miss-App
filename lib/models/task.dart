@@ -143,13 +143,24 @@ class Task {
 
   /// Creates a Task instance from a JSON Map.
   factory Task.fromJson(Map<String, dynamic> json) {
+    final rawDate = (json['dueDate'] ?? json['due_date']) as String;
+    final rawDueHour = json['dueHour'] ?? json['due_hour'];
+    final parsedDueHour = rawDueHour is int
+        ? rawDueHour
+        : (rawDueHour != null ? int.tryParse(rawDueHour.toString()) : null);
+
+    final rawDueMinute = json['dueMinute'] ?? json['due_minute'];
+    final parsedDueMinute = rawDueMinute is int
+        ? rawDueMinute
+        : (rawDueMinute != null ? int.tryParse(rawDueMinute.toString()) : null);
+
     return Task(
       id: json['id'] as String,
       title: json['title'] as String,
       description: (json['description'] as String?) ?? '',
-      dueDate: DateTime.parse(json['dueDate'] as String),
-      dueHour: json['dueHour'] as int? ?? 12,
-      dueMinute: json['dueMinute'] as int? ?? 0,
+      dueDate: DateTime.parse(rawDate),
+      dueHour: parsedDueHour ?? 12,
+      dueMinute: parsedDueMinute ?? 0,
       priority: Priority.fromString(json['priority'] as String?),
       recurrence: Recurrence.fromString(json['recurrence'] as String?),
       url: json['url'] as String?,

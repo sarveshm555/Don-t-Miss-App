@@ -7,6 +7,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from agent.database.connection import get_db_session
 from agent.database.models import User, Reminder, ReminderChannel, ActionHistory
+from agent.models.reminder_schema import ReminderResponse
 
 logger = logging.getLogger(__name__)
 
@@ -176,3 +177,28 @@ def persist_confirmed_reminder_to_db(
     finally:
         if should_close:
             session.close()
+
+def reminder_to_response(reminder: Reminder) -> ReminderResponse:
+    """Serialize SQLAlchemy Reminder instance into standard Pydantic response."""
+    channels = [rc.channel for rc in (reminder.channels or [])]
+    if not channels:
+        channels = ["local"]
+
+    return ReminderResponse(
+        id=reminder.id,
+        user_id=reminder.user_id,
+        title=reminder.title,
+        description=reminder.description,
+        due_date=reminder.due_date.isoformat() if reminder.due_date else None,
+        due_hour=reminder.due_hour,
+        due_minute=reminder.due_minute,
+        priority=reminder.priority,
+        recurrence=reminder.recurrence,
+        url=reminder.url,
+        status=reminder.status,
+        completed_at=reminder.completed_at.isoformat() if reminder.completed_at else None,
+        raw_prompt=reminder.raw_prompt,
+        channels=channels,
+        created_at=reminder.created_at.isoformat() if reminder.created_at else "",
+        updated_at=reminder.updated_at.isoformat() if reminder.updated_at else "",
+    )

@@ -69,6 +69,25 @@ class FakeActionDispatchService implements ActionDispatchService {
     }
     return returnValue;
   }
+
+  @override
+  Future<BatchConfirmResult> dispatchBatchConfirmedActions({
+    required List<AiReminderDraft> drafts,
+    String? idempotencyKey,
+    String? authToken,
+  }) async {
+    return BatchConfirmResult(
+      success: true,
+      status: 'confirmed',
+      totalRequested: drafts.length,
+      totalCreated: drafts.length,
+      createdReminderIds: drafts.map((d) => d.id ?? d.title).toList(),
+      reminders: const [],
+      schedulingStatus: const [],
+      failures: const [],
+      message: 'Batch saved',
+    );
+  }
 }
 
 void main() {
