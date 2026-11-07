@@ -12,6 +12,8 @@ class ReminderDraft(BaseModel):
     recurrence: Literal["none", "daily", "weekly", "monthly"] = Field("none", description="Recurrence rule: none, daily, weekly, or monthly")
     url: Optional[str] = Field(None, description="Optional associated web link / URL")
     channels: List[str] = Field(default_factory=lambda: ["local", "whatsapp"], description="Target delivery channels: local, whatsapp")
+    timezone: Optional[str] = Field("Asia/Kolkata", description="Timezone name for the reminder, default Asia/Kolkata")
+    due_timestamp_utc: Optional[str] = Field(None, description="ISO-8601 UTC timestamp when reminder is due")
     reasoning: Optional[str] = Field(None, description="Brief explanation of how the AI extracted these fields")
 
 class ReminderProposal(BaseModel):
@@ -77,6 +79,8 @@ class ReminderCreateRequest(BaseModel):
     completed_at: Optional[str] = Field(None, description="Completion ISO timestamp")
     raw_prompt: Optional[str] = Field(None, description="Original user prompt")
     channels: Optional[List[str]] = Field(default_factory=lambda: ["local", "whatsapp"], description="Delivery channels")
+    timezone: Optional[str] = Field("Asia/Kolkata", description="Timezone name for the reminder, default Asia/Kolkata")
+    due_timestamp_utc: Optional[str] = Field(None, description="ISO-8601 UTC timestamp when reminder is due")
 
 class ReminderUpdateRequest(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -91,6 +95,8 @@ class ReminderUpdateRequest(BaseModel):
     completed_at: Optional[str] = None
     raw_prompt: Optional[str] = None
     channels: Optional[List[str]] = None
+    timezone: Optional[str] = None
+    due_timestamp_utc: Optional[str] = None
 
 class ReminderResponse(BaseModel):
     id: str
@@ -100,6 +106,8 @@ class ReminderResponse(BaseModel):
     due_date: Optional[str] = None
     due_hour: Optional[int] = None
     due_minute: Optional[int] = None
+    timezone: Optional[str] = "Asia/Kolkata"
+    due_timestamp_utc: Optional[str] = None
     priority: str
     recurrence: str
     url: Optional[str] = None
@@ -125,6 +133,7 @@ class BatchFailureItem(BaseModel):
 
 class ReminderBatchRequest(BaseModel):
     reminders: List[ReminderDraft] = Field(..., description="List of validated reminder drafts explicitly approved by the user")
+    timezone: Optional[str] = Field("Asia/Kolkata", description="Timezone of the user submitting the batch")
     idempotency_key: Optional[str] = Field(None, description="Client-supplied key to prevent duplicate creation on retry")
 
 class ReminderBatchResponse(BaseModel):

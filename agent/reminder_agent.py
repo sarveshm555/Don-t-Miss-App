@@ -21,6 +21,7 @@ from agent.models.reminder_schema import (
     ReminderPlanRequest,
     ReminderPlanResponse,
 )
+from agent.services.timezone_service import reminder_due_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +227,12 @@ FIELD EXTRACTION GUIDELINES:
                 priority=priority,
                 recurrence=recurrence,
                 channels=["local", "whatsapp"],
+                timezone="Asia/Kolkata",
+                due_timestamp_utc=(
+                    reminder_due_to_utc(due_date, due_hour, due_minute, "Asia/Kolkata").isoformat()
+                    if due_date and reminder_due_to_utc(due_date, due_hour, due_minute, "Asia/Kolkata")
+                    else None
+                ),
                 reasoning="Extracted from assistant text response (fallback)",
             )
             return ReminderProposal(
@@ -306,6 +313,17 @@ FIELD EXTRACTION GUIDELINES:
                 proposals = []
                 for p_data in proposals_data:
                     draft_data = p_data.get("draft", {})
+                    if not draft_data.get("timezone"):
+                        draft_data["timezone"] = tz_name
+                    if draft_data.get("dueDate") and not draft_data.get("due_timestamp_utc"):
+                        d_utc = reminder_due_to_utc(
+                            draft_data.get("dueDate"),
+                            draft_data.get("dueHour"),
+                            draft_data.get("dueMinute"),
+                            tz_name,
+                        )
+                        if d_utc:
+                            draft_data["due_timestamp_utc"] = d_utc.isoformat()
                     draft = ReminderDraft(**draft_data)
 
                     # Validation: check for past dates/times

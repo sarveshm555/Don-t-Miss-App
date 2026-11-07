@@ -25,6 +25,7 @@ from agent.models.reminder_schema import (
 )
 from agent.services.reminder_persistence import parse_due_date, reminder_to_response
 from agent.services.whatsapp_service import BaseWhatsAppService, TwilioWhatsAppService
+from agent.services.timezone_service import reminder_due_to_utc, is_reminder_due_utc
 
 logger = logging.getLogger(__name__)
 
@@ -80,24 +81,24 @@ def validate_draft(draft: ReminderDraft) -> None:
 
 
 def is_reminder_due_now(reminder: Reminder, current_dt: Optional[datetime] = None) -> bool:
-    """Check if reminder has reached or passed its due date and time."""
+    """Check if reminder has reached or passed its due date and time in UTC."""
+    now = current_dt or datetime.now(timezone.utc)
+    if getattr(reminder, "due_timestamp_utc", None) is not None:
+        return is_reminder_due_utc(reminder.due_timestamp_utc, now)
+
     if not reminder.due_date:
         return False
-    now = current_dt or datetime.now(timezone.utc)
-    current_date = now.date()
 
-    if current_date > reminder.due_date:
-        return True
-    elif current_date < reminder.due_date:
+    tz_name = getattr(reminder, "timezone", None) or "Asia/Kolkata"
+    due_utc = reminder_due_to_utc(
+        due_date=reminder.due_date,
+        due_hour=reminder.due_hour,
+        due_minute=reminder.due_minute,
+        tz_name=tz_name,
+    )
+    if not due_utc:
         return False
-
-    rem_hour = reminder.due_hour if reminder.due_hour is not None else 0
-    rem_minute = reminder.due_minute if reminder.due_minute is not None else 0
-    if now.hour > rem_hour:
-        return True
-    elif now.hour == rem_hour and now.minute >= rem_minute:
-        return True
-    return False
+    return is_reminder_due_utc(due_utc, now)
 
 
 class BatchReminderService:
@@ -252,6 +253,14 @@ class BatchReminderService:
                 if recurrence not in ("none", "daily", "weekly", "monthly"):
                     recurrence = "none"
 
+                tz_name = (
+                    getattr(draft, "timezone", None)
+                    or getattr(request, "timezone", None)
+                    or getattr(current_user, "timezone", None)
+                    or "Asia/Kolkata"
+                )
+                due_utc = reminder_due_to_utc(due_d, draft.dueHour, draft.dueMinute, tz_name)
+
                 existing_rem = (
                     db.query(Reminder)
                     .filter(Reminder.id == rem_id, Reminder.user_id == current_user.id)
@@ -264,6 +273,8 @@ class BatchReminderService:
                     existing_rem.due_date = due_d
                     existing_rem.due_hour = draft.dueHour
                     existing_rem.due_minute = draft.dueMinute
+                    existing_rem.timezone = tz_name
+                    existing_rem.due_timestamp_utc = due_utc
                     existing_rem.priority = priority
                     existing_rem.recurrence = recurrence
                     existing_rem.url = draft.url
@@ -280,6 +291,8 @@ class BatchReminderService:
                         due_date=due_d,
                         due_hour=draft.dueHour,
                         due_minute=draft.dueMinute,
+                        timezone=tz_name,
+                        due_timestamp_utc=due_utc,
                         priority=priority,
                         recurrence=recurrence,
                         url=draft.url,

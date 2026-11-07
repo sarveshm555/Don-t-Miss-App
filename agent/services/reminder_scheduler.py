@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from agent.database.connection import get_db_session
 from agent.database.models import Reminder, ReminderChannel, User, ActionHistory
 from agent.services.twilio_whatsapp_service import TwilioWhatsAppService
+from agent.services.timezone_service import reminder_due_to_utc, is_reminder_due_utc
 
 logger = logging.getLogger(__name__)
 
@@ -32,28 +33,34 @@ class ReminderScheduler:
         self._task: Optional[asyncio.Task] = None
 
     def is_reminder_due(self, reminder: Reminder, current_dt: datetime) -> bool:
-        """Determines whether a reminder has reached or passed its scheduled due time."""
+        """Determines whether a reminder has reached or passed its scheduled due time.
+
+        Evaluates accurately in UTC using due_timestamp_utc or converts local due_date/hour/minute
+        using the reminder's associated timezone (defaulting to Asia/Kolkata).
+        """
+        # 1. Use stored UTC timestamp if available
+        if getattr(reminder, "due_timestamp_utc", None) is not None:
+            return is_reminder_due_utc(reminder.due_timestamp_utc, current_dt)
+
+        # 2. Backward compatibility fallback: compute UTC timestamp on the fly
         if not reminder.due_date:
             return False
 
-        current_date = current_dt.date()
-        if current_date > reminder.due_date:
-            return True
-        elif current_date < reminder.due_date:
+        user_tz = None
+        if reminder.user and getattr(reminder.user, "timezone", None):
+            user_tz = reminder.user.timezone
+
+        tz_name = getattr(reminder, "timezone", None) or user_tz or "Asia/Kolkata"
+        due_utc = reminder_due_to_utc(
+            due_date=reminder.due_date,
+            due_hour=reminder.due_hour,
+            due_minute=reminder.due_minute,
+            tz_name=tz_name,
+        )
+        if not due_utc:
             return False
 
-        # Same date: compare hour and minute
-        rem_hour = reminder.due_hour if reminder.due_hour is not None else 0
-        rem_minute = reminder.due_minute if reminder.due_minute is not None else 0
-
-        current_hour = current_dt.hour
-        current_minute = current_dt.minute
-
-        if current_hour > rem_hour:
-            return True
-        elif current_hour == rem_hour and current_minute >= rem_minute:
-            return True
-        return False
+        return is_reminder_due_utc(due_utc, current_dt)
 
     def process_due_reminders(
         self,

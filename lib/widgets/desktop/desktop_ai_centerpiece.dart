@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/utils/date_time_utils.dart';
 import '../../models/ai_reminder_draft.dart';
 import '../../models/recurrence.dart';
+import '../../providers/auth_provider.dart';
 import '../../services/ai_reminder_service.dart';
 import '../../services/voice_recording_service.dart';
 import '../priority_badge.dart';
@@ -124,6 +126,12 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
 
   Future<void> _stopAndTranscribeVoiceRecording() async {
     _durationSub?.cancel();
+    AuthProvider? auth;
+    try {
+      auth = Provider.of<AuthProvider>(context, listen: false);
+    } catch (_) {}
+    final authToken = auth?.token;
+
     setState(() {
       _isRecording = false;
       _isProcessing = true;
@@ -132,13 +140,12 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
 
     try {
       final audioBytes = await _voiceRecorder.stopRecording();
+      if (!mounted) return;
       if (audioBytes == null || audioBytes.isEmpty) {
-        if (mounted) {
-          setState(() {
-            _isProcessing = false;
-            _errorMessage = 'No audio recorded. Please try again.';
-          });
-        }
+        setState(() {
+          _isProcessing = false;
+          _errorMessage = 'No audio recorded. Please try again.';
+        });
         return;
       }
 
@@ -146,6 +153,7 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
         audioBytes,
         filename: _voiceRecorder.recordedFilename,
         language: 'en',
+        authToken: authToken,
       );
 
       if (!mounted) return;
@@ -182,7 +190,16 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
     });
 
     try {
-      final drafts = await widget.aiService.parseMultiPrompt(prompt);
+      AuthProvider? auth;
+      try {
+        auth = Provider.of<AuthProvider>(context, listen: false);
+      } catch (_) {}
+      final authToken = auth?.token;
+
+      final drafts = await widget.aiService.parseMultiPrompt(
+        prompt,
+        authToken: authToken,
+      );
       if (!mounted) return;
       setState(() {
         _drafts = List.from(drafts);

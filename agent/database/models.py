@@ -29,6 +29,7 @@ class User(Base):
     full_name = Column(String(255), nullable=True)
     phone_number = Column(String(32), nullable=True)
     phone_verified = Column(Boolean, default=False, nullable=False)
+    timezone = Column(String(64), default="Asia/Kolkata", nullable=True)
     created_at = Column(DateTime(timezone=True), default=get_utc_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=get_utc_now, onupdate=get_utc_now, nullable=False)
 
@@ -47,6 +48,8 @@ class Reminder(Base):
     due_date = Column(Date, nullable=True)
     due_hour = Column(Integer, nullable=True)
     due_minute = Column(Integer, nullable=True)
+    timezone = Column(String(64), default="Asia/Kolkata", nullable=True)
+    due_timestamp_utc = Column(DateTime(timezone=True), nullable=True, index=True)
     priority = Column(String(16), default="medium", nullable=False)  # 'low', 'medium', 'high'
     recurrence = Column(String(32), default="none", nullable=False)   # 'none', 'daily', 'weekly', 'monthly'
     url = Column(String(1024), nullable=True)

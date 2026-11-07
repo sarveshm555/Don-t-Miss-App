@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from agent.database.connection import get_db_session
 from agent.database.models import User, Reminder, ReminderChannel, ActionHistory
 from agent.models.reminder_schema import ReminderResponse
+from agent.services.timezone_service import reminder_due_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,13 @@ def persist_confirmed_reminder_to_db(
 
         # 2. Parse due date safely across ISO 8601 date and datetime formats
         due_d = parse_due_date(getattr(draft, "dueDate", None))
+        tz_name = getattr(draft, "timezone", None) or getattr(user, "timezone", None) or "Asia/Kolkata"
+        due_utc = reminder_due_to_utc(
+            due_d,
+            getattr(draft, "dueHour", None),
+            getattr(draft, "dueMinute", None),
+            tz_name,
+        )
 
         # 3. Create or update reminder record with status CONFIRMED
         target_id = reminder_id.strip() if reminder_id and reminder_id.strip() else None
@@ -125,6 +133,8 @@ def persist_confirmed_reminder_to_db(
             reminder.due_date = due_d
             reminder.due_hour = getattr(draft, "dueHour", None)
             reminder.due_minute = getattr(draft, "dueMinute", None)
+            reminder.timezone = tz_name
+            reminder.due_timestamp_utc = due_utc
             reminder.priority = getattr(draft, "priority", None) or "medium"
             reminder.recurrence = getattr(draft, "recurrence", None) or "none"
             reminder.url = getattr(draft, "url", None)
@@ -139,6 +149,8 @@ def persist_confirmed_reminder_to_db(
                 due_date=due_d,
                 due_hour=getattr(draft, "dueHour", None),
                 due_minute=getattr(draft, "dueMinute", None),
+                timezone=tz_name,
+                due_timestamp_utc=due_utc,
                 priority=getattr(draft, "priority", None) or "medium",
                 recurrence=getattr(draft, "recurrence", None) or "none",
                 url=getattr(draft, "url", None),
@@ -192,6 +204,8 @@ def reminder_to_response(reminder: Reminder) -> ReminderResponse:
         due_date=reminder.due_date.isoformat() if reminder.due_date else None,
         due_hour=reminder.due_hour,
         due_minute=reminder.due_minute,
+        timezone=getattr(reminder, "timezone", "Asia/Kolkata") or "Asia/Kolkata",
+        due_timestamp_utc=reminder.due_timestamp_utc.isoformat() if getattr(reminder, "due_timestamp_utc", None) else None,
         priority=reminder.priority,
         recurrence=reminder.recurrence,
         url=reminder.url,

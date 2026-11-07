@@ -11,6 +11,7 @@ from agent.models.reminder_schema import (
     ReminderResponse,
 )
 from agent.services.jwt_service import get_current_user_required
+from agent.services.timezone_service import reminder_due_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ def _reminder_to_response(reminder: Reminder) -> ReminderResponse:
         due_date=reminder.due_date.isoformat() if reminder.due_date else None,
         due_hour=reminder.due_hour,
         due_minute=reminder.due_minute,
+        timezone=getattr(reminder, "timezone", "Asia/Kolkata") or "Asia/Kolkata",
+        due_timestamp_utc=reminder.due_timestamp_utc.isoformat() if getattr(reminder, "due_timestamp_utc", None) else None,
         priority=reminder.priority,
         recurrence=reminder.recurrence,
         url=reminder.url,
@@ -104,6 +107,9 @@ def create_reminder(
             raise HTTPException(status_code=400, detail="Invalid due_date format. Expected YYYY-MM-DD.")
 
     reminder_id = request.id.strip() if request.id and request.id.strip() else generate_uuid()
+    tz_str = request.timezone or getattr(current_user, "timezone", None) or "Asia/Kolkata"
+    due_utc = reminder_due_to_utc(due_d, request.due_hour, request.due_minute, tz_str)
+
     comp_dt = None
     if request.completed_at and request.completed_at.strip():
         try:
@@ -125,6 +131,8 @@ def create_reminder(
             existing.due_date = due_d
             existing.due_hour = request.due_hour
             existing.due_minute = request.due_minute
+            existing.timezone = tz_str
+            existing.due_timestamp_utc = due_utc
             existing.priority = request.priority or "medium"
             existing.recurrence = request.recurrence or "none"
             existing.url = request.url
@@ -155,6 +163,8 @@ def create_reminder(
             due_date=due_d,
             due_hour=request.due_hour,
             due_minute=request.due_minute,
+            timezone=tz_str,
+            due_timestamp_utc=due_utc,
             priority=request.priority or "medium",
             recurrence=request.recurrence or "none",
             url=request.url,
@@ -235,6 +245,23 @@ def update_reminder(
 
         if request.raw_prompt is not None:
             reminder.raw_prompt = request.raw_prompt
+
+        if request.timezone is not None:
+            reminder.timezone = request.timezone
+
+        if (
+            request.due_date is not None
+            or request.due_hour is not None
+            or request.due_minute is not None
+            or request.timezone is not None
+        ):
+            tz = reminder.timezone or getattr(current_user, "timezone", None) or "Asia/Kolkata"
+            reminder.due_timestamp_utc = reminder_due_to_utc(
+                reminder.due_date,
+                reminder.due_hour,
+                reminder.due_minute,
+                tz,
+            )
 
         if request.channels is not None:
             existing_chs = db.query(ReminderChannel).filter_by(reminder_id=reminder.id).all()

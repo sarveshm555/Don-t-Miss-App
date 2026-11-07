@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name VARCHAR(255),
     phone_number VARCHAR(32),
     phone_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    timezone VARCHAR(64) DEFAULT 'Asia/Kolkata',
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -27,6 +28,8 @@ CREATE TABLE IF NOT EXISTS reminders (
     due_date DATE,
     due_hour INTEGER,
     due_minute INTEGER,
+    timezone VARCHAR(64) DEFAULT 'Asia/Kolkata',
+    due_timestamp_utc TIMESTAMP WITH TIME ZONE,
     priority VARCHAR(16) NOT NULL DEFAULT 'medium',
     recurrence VARCHAR(32) NOT NULL DEFAULT 'none',
     url VARCHAR(1024),
@@ -39,6 +42,7 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id);
 CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
 CREATE INDEX IF NOT EXISTS idx_reminders_due_date ON reminders(due_date);
+CREATE INDEX IF NOT EXISTS idx_reminders_due_timestamp_utc ON reminders(due_timestamp_utc);
 
 -- 3. REMINDER CHANNELS TABLE
 CREATE TABLE IF NOT EXISTS reminder_channels (
