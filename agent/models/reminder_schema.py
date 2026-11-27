@@ -24,10 +24,10 @@ class ReminderProposal(BaseModel):
     draft: ReminderDraft = Field(..., description="The parsed reminder draft")
 
 class AgentRequest(BaseModel):
-    prompt: str = Field(..., description="Natural language reminder request from user")
+    prompt: str = Field(..., max_length=4000, description="Natural language reminder request from user")
     current_date: Optional[str] = Field(None, description="Current local date in YYYY-MM-DD for relative time resolution")
     current_time: Optional[str] = Field(None, description="Current local time in HH:MM")
-    timezone: Optional[str] = Field("Asia/Kolkata", description="User configured timezone, default Asia/Kolkata")
+    timezone: Optional[str] = Field(None, description="User configured timezone (falls back to profile/Asia/Kolkata)")
 
 class AgentResponse(BaseModel):
     success: bool
@@ -38,10 +38,10 @@ class AgentResponse(BaseModel):
     clarification_needed: Optional[str] = Field(None, description="Question asked if prompt is ambiguous or details are missing")
 
 class ReminderPlanRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, description="Natural language prompt with one or more reminder requests")
+    prompt: str = Field(..., min_length=1, max_length=4000, description="Natural language prompt with one or more reminder requests")
     current_date: Optional[str] = Field(None, description="Current local date in YYYY-MM-DD")
     current_time: Optional[str] = Field(None, description="Current local time in HH:MM")
-    timezone: Optional[str] = Field("Asia/Kolkata", description="User configured timezone, default Asia/Kolkata")
+    timezone: Optional[str] = Field(None, description="User configured timezone (falls back to profile/Asia/Kolkata)")
 
 class ReminderPlanResponse(BaseModel):
     success: bool

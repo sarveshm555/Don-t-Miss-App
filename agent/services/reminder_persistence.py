@@ -160,17 +160,26 @@ def persist_confirmed_reminder_to_db(
             session.add(reminder)
         session.commit()
 
-        # 4. Create reminder channels
+        # 4. Create reminder channels without duplicating existing entries
         draft_channels = getattr(draft, "channels", None) or ["local"]
+        existing_channels = {
+            rc.channel: rc
+            for rc in session.query(ReminderChannel).filter_by(reminder_id=reminder.id).all()
+        }
         for ch in draft_channels:
             ch_status = "DISPATCHED" if ch in channels_dispatched else "PENDING"
-            channel_record = ReminderChannel(
-                reminder_id=reminder.id,
-                channel=ch,
-                status=ch_status,
-                dispatched_at=datetime.now(timezone.utc) if ch_status == "DISPATCHED" else None,
-            )
-            session.add(channel_record)
+            if ch in existing_channels:
+                if ch_status == "DISPATCHED" and existing_channels[ch].status != "DISPATCHED":
+                    existing_channels[ch].status = "DISPATCHED"
+                    existing_channels[ch].dispatched_at = datetime.now(timezone.utc)
+            else:
+                channel_record = ReminderChannel(
+                    reminder_id=reminder.id,
+                    channel=ch,
+                    status=ch_status,
+                    dispatched_at=datetime.now(timezone.utc) if ch_status == "DISPATCHED" else None,
+                )
+                session.add(channel_record)
 
         # 5. Create action history record
         history = ActionHistory(

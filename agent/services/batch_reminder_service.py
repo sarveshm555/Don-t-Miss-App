@@ -253,10 +253,14 @@ class BatchReminderService:
                 if recurrence not in ("none", "daily", "weekly", "monthly"):
                     recurrence = "none"
 
+                raw_draft_tz = getattr(draft, "timezone", None)
+                req_tz = getattr(request, "timezone", None)
+                user_tz = getattr(current_user, "timezone", None)
                 tz_name = (
-                    getattr(draft, "timezone", None)
-                    or getattr(request, "timezone", None)
-                    or getattr(current_user, "timezone", None)
+                    (raw_draft_tz if raw_draft_tz and raw_draft_tz != "Asia/Kolkata" else None)
+                    or (req_tz if req_tz and req_tz.strip() else None)
+                    or raw_draft_tz
+                    or (user_tz if user_tz and user_tz.strip() else None)
                     or "Asia/Kolkata"
                 )
                 due_utc = reminder_due_to_utc(due_d, draft.dueHour, draft.dueMinute, tz_name)
@@ -429,13 +433,14 @@ class BatchReminderService:
                                     priority=rem.priority,
                                 )
                                 if wa_result.get("success"):
+                                    wa_sid = wa_result.get("sid") or wa_result.get("message_sid")
                                     scheduling_statuses.append(
                                         ReminderSchedulingStatus(
                                             reminder_id=rem.id,
                                             channel="whatsapp",
                                             status="DISPATCHED",
                                             delivered=True,
-                                            detail=f"Dispatched via WhatsApp (SID: {wa_result.get('sid')}).",
+                                            detail=f"Dispatched via WhatsApp (SID: {wa_sid}).",
                                         )
                                     )
                                     ch_rec = (

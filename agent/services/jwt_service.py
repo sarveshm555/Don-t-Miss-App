@@ -1,4 +1,5 @@
 import os
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -13,6 +14,7 @@ from agent.database.models import User
 # JWT Configuration
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
+REFRESH_TOKEN_EXPIRE_DAYS = 30
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -61,6 +63,30 @@ def create_access_token(
         "sub": user_id,
         "phone": phone_number,
         "name": name,
+        "type": "access",
+        "jti": str(uuid.uuid4()),
+        "iat": int(now.timestamp()),
+        "exp": int(expire.timestamp()),
+    }
+    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
+
+
+def create_refresh_token(
+    user_id: str,
+    phone_number: Optional[str] = None,
+    name: Optional[str] = None,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """Create a signed JWT refresh token containing user ID and 30-day expiration."""
+    secret = get_jwt_secret()
+    now = datetime.now(timezone.utc)
+    expire = now + (expires_delta or timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS))
+    payload = {
+        "sub": user_id,
+        "phone": phone_number,
+        "name": name,
+        "type": "refresh",
+        "jti": str(uuid.uuid4()),
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
     }
@@ -73,7 +99,23 @@ def decode_access_token(token: str) -> dict:
     Raises jwt.ExpiredSignatureError or jwt.PyJWTError on invalid token.
     """
     secret = get_jwt_secret()
-    return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+    payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+    if payload.get("type") == "refresh":
+        raise jwt.InvalidTokenError("Refresh token cannot be used as an access token.")
+    return payload
+
+
+def decode_refresh_token(token: str) -> dict:
+    """Decode and validate a JWT refresh token.
+
+    Ensures the token type is 'refresh'.
+    Raises jwt.ExpiredSignatureError or jwt.PyJWTError on invalid token.
+    """
+    secret = get_jwt_secret()
+    payload = jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
+    if payload.get("type") != "refresh":
+        raise jwt.InvalidTokenError("Token is not a valid refresh token.")
+    return payload
 
 
 def get_current_user_required(
@@ -97,10 +139,11 @@ def get_current_user_required(
             detail="Token has expired.",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except (jwt.InvalidTokenError, jwt.PyJWTError):
+    except (jwt.InvalidTokenError, jwt.PyJWTError) as e:
+        detail_msg = str(e) if "Refresh token" in str(e) else "Invalid authentication token."
         raise HTTPException(
             status_code=401,
-            detail="Invalid authentication token.",
+            detail=detail_msg,
             headers={"WWW-Authenticate": "Bearer"},
         )
 

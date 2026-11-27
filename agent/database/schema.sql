@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     recurrence VARCHAR(32) NOT NULL DEFAULT 'none',
     url VARCHAR(1024),
     status VARCHAR(32) NOT NULL DEFAULT 'PROPOSED',
+    completed_at TIMESTAMP WITH TIME ZONE,
     raw_prompt TEXT,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -96,3 +97,6 @@ CREATE TABLE IF NOT EXISTS pending_whatsapp_confirmations (
 CREATE INDEX IF NOT EXISTS idx_pending_confirmations_user_id ON pending_whatsapp_confirmations(user_id);
 CREATE INDEX IF NOT EXISTS idx_pending_confirmations_phone ON pending_whatsapp_confirmations(phone_number);
 CREATE INDEX IF NOT EXISTS idx_pending_confirmations_status ON pending_whatsapp_confirmations(status);
+
+-- Safe idempotent migration for pre-existing databases created before completed_at was added
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE;

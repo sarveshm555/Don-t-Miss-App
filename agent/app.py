@@ -65,10 +65,20 @@ app.include_router(auth_router)
 app.include_router(reminder_router)
 app.include_router(twilio_router)
 
+cors_origins_env = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+if cors_origins_env:
+    allow_origins = [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+    allow_credentials = True
+else:
+    # Bearer token authentication does not require cookies; keep allow_credentials=False
+    # when permitting wildcard origins to avoid invalid CORS wildcard+credential pairs.
+    allow_origins = ["*"]
+    allow_credentials = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -101,12 +111,18 @@ async def create_reminder_proposal(
 ):
     if not request.prompt or not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-    
+
+    effective_tz = (
+        (request.timezone.strip() if request.timezone and request.timezone.strip() else None)
+        or (getattr(current_user, "timezone", None) if current_user else None)
+        or "Asia/Kolkata"
+    )
+
     response = await agent.process_prompt_async(
         prompt=request.prompt,
         current_date=request.current_date,
         current_time=request.current_time,
-        timezone=request.timezone,
+        timezone=effective_tz,
     )
     return response
 
@@ -123,7 +139,16 @@ async def create_reminder_plan(
     if not request.prompt or not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
 
-    response = await agent.process_plan_async(request)
+    effective_tz = (
+        (request.timezone.strip() if request.timezone and request.timezone.strip() else None)
+        or (getattr(current_user, "timezone", None) if current_user else None)
+        or "Asia/Kolkata"
+    )
+    effective_request = (
+        request if request.timezone == effective_tz else request.model_copy(update={"timezone": effective_tz})
+    )
+
+    response = await agent.process_plan_async(effective_request)
     return response
 
 @app.post("/agent/reminders/batch", response_model=ReminderBatchResponse)

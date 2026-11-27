@@ -57,7 +57,7 @@ class OpenAIProvider:
                 "Please configure OPENAI_API_KEY in your environment or Render environment variables."
             )
         from openai import OpenAI
-        return OpenAI(api_key=self._api_key)
+        return OpenAI(api_key=self._api_key, timeout=60.0)
 
     def get_async_client(self):
         if not self.is_configured:
@@ -66,7 +66,7 @@ class OpenAIProvider:
                 "Please configure OPENAI_API_KEY in your environment or Render environment variables."
             )
         from openai import AsyncOpenAI
-        return AsyncOpenAI(api_key=self._api_key)
+        return AsyncOpenAI(api_key=self._api_key, timeout=60.0)
 
     def get_status_info(self) -> Dict[str, Any]:
         return {

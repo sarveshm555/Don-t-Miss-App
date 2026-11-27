@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Generator
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 # Base class for SQLAlchemy ORM models
@@ -81,9 +81,20 @@ def get_db_session() -> Generator[Session, None, None]:
         session.close()
 
 def init_db():
-    """Create all tables if they do not exist."""
+    """Create all tables if they do not exist and apply safe idempotent column migrations."""
     engine = get_db_engine()
     Base.metadata.create_all(bind=engine)
+    try:
+        inspector = inspect(engine)
+        if "reminders" in inspector.get_table_names():
+            cols = {c["name"] for c in inspector.get_columns("reminders")}
+            if "completed_at" not in cols:
+                col_type = "DATETIME" if str(engine.url).startswith("sqlite") else "TIMESTAMP WITH TIME ZONE"
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE reminders ADD COLUMN completed_at {col_type}"))
+    except Exception:
+        # Never block startup if inspection/migration is not supported by a custom engine
+        pass
 
 def check_db_connectivity() -> bool:
     """Perform a lightweight health check against the configured database."""

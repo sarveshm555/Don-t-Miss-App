@@ -1,3 +1,4 @@
+import contextvars
 import threading
 from typing import Optional, Dict, Any, List
 
@@ -46,6 +47,28 @@ class ProposalTracker:
 
 
 proposal_tracker = ProposalTracker()
+
+# Per-async-request ContextVar ensures concurrent HTTP requests do not overwrite
+# or leak each other's extracted proposals, while preserving global fallback for tests.
+_active_tracker_var: contextvars.ContextVar[Optional[ProposalTracker]] = contextvars.ContextVar(
+    "active_proposal_tracker",
+    default=None,
+)
+
+
+def set_active_tracker(tracker: ProposalTracker) -> contextvars.Token:
+    """Bind a request-scoped ProposalTracker to the current async execution context."""
+    return _active_tracker_var.set(tracker)
+
+
+def reset_active_tracker(token: contextvars.Token) -> None:
+    """Restore the previous ProposalTracker binding for the current execution context."""
+    _active_tracker_var.reset(token)
+
+
+def get_active_tracker() -> ProposalTracker:
+    """Return the active request-scoped tracker, or global fallback for direct calls."""
+    return _active_tracker_var.get() or proposal_tracker
 
 
 def create_reminder(
@@ -120,7 +143,7 @@ def create_reminder(
         },
     }
 
-    proposal_tracker.record(proposal_data)
+    get_active_tracker().record(proposal_data)
     return proposal_data
 
 
@@ -137,7 +160,7 @@ def request_clarification(
     Returns:
         A dictionary containing the clarification request details.
     """
-    proposal_tracker.record_clarification(question=question, issue=issue)
+    get_active_tracker().record_clarification(question=question, issue=issue)
     return {
         "status": "CLARIFICATION_REQUESTED",
         "question": question,

@@ -19,6 +19,15 @@ class PhoneVerificationRequest(BaseModel):
     phone_number: str = Field(..., description="Mobile / WhatsApp number")
     verification_code: str = Field(..., min_length=4, max_length=6, description="Verification code")
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: Optional[str] = Field(None, description="Valid JWT refresh token")
+
+class TokenRefreshResponse(BaseModel):
+    success: bool
+    token: str
+    refresh_token: Optional[str] = None
+    message: str
+
 class AuthResponse(BaseModel):
     success: bool
     user_id: Optional[str] = None
@@ -26,4 +35,5 @@ class AuthResponse(BaseModel):
     phone_number: Optional[str] = None
     is_verified: bool = False
     token: Optional[str] = None
+    refresh_token: Optional[str] = None
     message: str

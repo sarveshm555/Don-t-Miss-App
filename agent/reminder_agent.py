@@ -7,9 +7,11 @@ import logging
 from typing import Optional, Dict, Any, List, Tuple
 from agent.providers.openai_provider import OpenAIProvider
 from agent.tools.reminder_tools import (
+    ProposalTracker,
     create_reminder,
     request_clarification,
-    proposal_tracker,
+    set_active_tracker,
+    reset_active_tracker,
     REMINDER_TOOL_DEFINITION,
     CLARIFICATION_TOOL_DEFINITION,
 )
@@ -201,7 +203,14 @@ FIELD EXTRACTION GUIDELINES:
             pass
         return False
 
-    def _extract_fallback_proposal(self, text: str, raw_prompt: str) -> Optional[ReminderProposal]:
+    def _extract_fallback_proposal(
+        self,
+        text: str,
+        raw_prompt: str,
+        cur_date: Optional[str] = None,
+        cur_time: Optional[str] = None,
+        timezone_name: str = "Asia/Kolkata",
+    ) -> Optional[ReminderProposal]:
         title_match = re.search(r"\*\*Title:\*\*\s*(.+)", text, re.IGNORECASE) or re.search(r"Title:\s*(.+)", text, re.IGNORECASE)
         date_match = re.search(r"\*\*Due Date:\*\*\s*(\d{4}-\d{2}-\d{2})", text, re.IGNORECASE) or re.search(r"Due Date:\s*(\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
         time_match = re.search(r"\*\*Due Time:\*\*\s*(\d{1,2}):(\d{2})", text, re.IGNORECASE) or re.search(r"Due Time:\s*(\d{1,2}):(\d{2})", text, re.IGNORECASE)
@@ -218,6 +227,16 @@ FIELD EXTRACTION GUIDELINES:
             priority = prio_match.group(1).lower().strip() if prio_match else "medium"
             recurrence = recur_match.group(1).lower().strip() if recur_match else "none"
 
+            if cur_date and cur_time and self._is_in_past(due_date, due_hour, due_minute, cur_date, cur_time):
+                return None
+
+            tz_effective = timezone_name or "Asia/Kolkata"
+            due_utc_obj = (
+                reminder_due_to_utc(due_date, due_hour, due_minute, tz_effective)
+                if due_date
+                else None
+            )
+
             draft = ReminderDraft(
                 title=title,
                 description=description,
@@ -227,12 +246,8 @@ FIELD EXTRACTION GUIDELINES:
                 priority=priority,
                 recurrence=recurrence,
                 channels=["local", "whatsapp"],
-                timezone="Asia/Kolkata",
-                due_timestamp_utc=(
-                    reminder_due_to_utc(due_date, due_hour, due_minute, "Asia/Kolkata").isoformat()
-                    if due_date and reminder_due_to_utc(due_date, due_hour, due_minute, "Asia/Kolkata")
-                    else None
-                ),
+                timezone=tz_effective,
+                due_timestamp_utc=due_utc_obj.isoformat() if due_utc_obj else None,
                 reasoning="Extracted from assistant text response (fallback)",
             )
             return ReminderProposal(
@@ -258,7 +273,6 @@ FIELD EXTRACTION GUIDELINES:
         tz_name = timezone or "Asia/Kolkata"
 
         system_prompt = self._build_system_prompt(cur_d, cur_t, tz_name)
-        proposal_tracker.reset()
 
         if not self.is_configured:
             logger.warning("OpenAI API key not configured")
@@ -270,6 +284,8 @@ FIELD EXTRACTION GUIDELINES:
                 ),
             )
 
+        request_tracker = ProposalTracker()
+        tracker_token = set_active_tracker(request_tracker)
         try:
             client = self.provider.get_async_client()
             completion = await client.chat.completions.create(
@@ -297,8 +313,8 @@ FIELD EXTRACTION GUIDELINES:
                     elif func_name == "request_clarification":
                         request_clarification(**args)
 
-            clarification = proposal_tracker.get_clarification()
-            proposals_data = proposal_tracker.get_proposals()
+            clarification = request_tracker.get_clarification()
+            proposals_data = request_tracker.get_proposals()
 
             # Handle clarification request when no reminders could be created
             if clarification and not proposals_data:
@@ -330,7 +346,7 @@ FIELD EXTRACTION GUIDELINES:
                     if self._is_in_past(draft.dueDate, draft.dueHour, draft.dueMinute, cur_d, cur_t):
                         past_msg = (
                             f"The requested time for '{draft.title}' ({draft.dueDate} "
-                            f"{draft.dueHour:02d}:{(draft.dueMinute or 0):02d}) is in the past. "
+                            f"{(draft.dueHour if draft.dueHour is not None else 9):02d}:{(draft.dueMinute or 0):02d}) is in the past. "
                             f"Please specify a future date and time."
                         )
                         return AgentResponse(
@@ -357,7 +373,13 @@ FIELD EXTRACTION GUIDELINES:
                 )
 
             # Secondary fallback: model returned formatted text
-            fallback = self._extract_fallback_proposal(content, prompt)
+            fallback = self._extract_fallback_proposal(
+                content,
+                prompt,
+                cur_date=cur_d,
+                cur_time=cur_t,
+                timezone_name=tz_name,
+            )
             if fallback:
                 return AgentResponse(
                     success=True,
@@ -386,6 +408,8 @@ FIELD EXTRACTION GUIDELINES:
                 success=False,
                 error=f"Error executing OpenAI agent: {str(e)}",
             )
+        finally:
+            reset_active_tracker(tracker_token)
 
     async def process_plan_async(
         self,

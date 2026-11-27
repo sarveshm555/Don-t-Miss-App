@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from typing import Optional
+import jwt
+from fastapi.security import HTTPAuthorizationCredentials
 from agent.database.connection import get_db_session
 from agent.database.models import User, PhoneVerification
 from agent.models.auth_schema import (
@@ -12,9 +15,17 @@ from agent.models.auth_schema import (
     UserSignInRequest,
     PhoneVerificationRequest,
     AuthResponse,
+    RefreshTokenRequest,
+    TokenRefreshResponse,
 )
 from agent.services.password_service import hash_password, verify_password
-from agent.services.jwt_service import create_access_token, get_current_user_required
+from agent.services.jwt_service import (
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
+    get_current_user_required,
+    bearer_scheme,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +86,13 @@ def sign_up(request: UserSignUpRequest, db: Session = Depends(get_db_session)):
     db.commit()
     db.refresh(user)
 
-    # 5. Generate initial access token
+    # 5. Generate initial access token and refresh token
     token = create_access_token(
+        user_id=user.id,
+        phone_number=user.phone_number,
+        name=user.full_name,
+    )
+    refresh_token = create_refresh_token(
         user_id=user.id,
         phone_number=user.phone_number,
         name=user.full_name,
@@ -89,6 +105,7 @@ def sign_up(request: UserSignUpRequest, db: Session = Depends(get_db_session)):
         phone_number=user.phone_number,
         is_verified=user.phone_verified,
         token=token,
+        refresh_token=refresh_token,
         message="Account created successfully. Please verify your phone number.",
     )
 
@@ -121,6 +138,11 @@ def sign_in(request: UserSignInRequest, db: Session = Depends(get_db_session)):
         phone_number=user.phone_number,
         name=user.full_name,
     )
+    refresh_token = create_refresh_token(
+        user_id=user.id,
+        phone_number=user.phone_number,
+        name=user.full_name,
+    )
 
     return AuthResponse(
         success=True,
@@ -129,6 +151,7 @@ def sign_in(request: UserSignInRequest, db: Session = Depends(get_db_session)):
         phone_number=user.phone_number,
         is_verified=user.phone_verified,
         token=token,
+        refresh_token=refresh_token,
         message="Signed in successfully.",
     )
 
@@ -180,6 +203,11 @@ def verify_phone(request: PhoneVerificationRequest, db: Session = Depends(get_db
         phone_number=user.phone_number,
         name=user.full_name,
     )
+    refresh_token = create_refresh_token(
+        user_id=user.id,
+        phone_number=user.phone_number,
+        name=user.full_name,
+    )
 
     return AuthResponse(
         success=True,
@@ -188,7 +216,92 @@ def verify_phone(request: PhoneVerificationRequest, db: Session = Depends(get_db
         phone_number=user.phone_number,
         is_verified=True,
         token=token,
+        refresh_token=refresh_token,
         message="Phone number verified successfully.",
+    )
+
+@auth_router.post("/refresh", response_model=TokenRefreshResponse)
+def refresh_access_token(
+    request: Optional[RefreshTokenRequest] = None,
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: Session = Depends(get_db_session),
+):
+    """Exchange a valid refresh token for a fresh access token and refreshed refresh token."""
+    raw_token = None
+    if request and request.refresh_token and request.refresh_token.strip():
+        raw_token = request.refresh_token.strip()
+    elif auth and auth.credentials and auth.credentials.strip():
+        raw_token = auth.credentials.strip()
+
+    if not raw_token:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=TokenRefreshResponse(
+                success=False,
+                token="",
+                message="Refresh token is required.",
+            ).model_dump(),
+        )
+
+    try:
+        payload = decode_refresh_token(raw_token)
+    except jwt.ExpiredSignatureError:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content=TokenRefreshResponse(
+                success=False,
+                token="",
+                message="Refresh token has expired. Please sign in again.",
+            ).model_dump(),
+        )
+    except (jwt.InvalidTokenError, jwt.PyJWTError):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content=TokenRefreshResponse(
+                success=False,
+                token="",
+                message="Invalid refresh token.",
+            ).model_dump(),
+        )
+
+    user_id = payload.get("sub")
+    if not user_id:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content=TokenRefreshResponse(
+                success=False,
+                token="",
+                message="Invalid token claims.",
+            ).model_dump(),
+        )
+
+    user = db.query(User).filter_by(id=user_id).first()
+    if not user:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content=TokenRefreshResponse(
+                success=False,
+                token="",
+                message="User not found.",
+            ).model_dump(),
+        )
+
+    new_access = create_access_token(
+        user_id=user.id,
+        phone_number=user.phone_number,
+        name=user.full_name,
+    )
+    new_refresh = create_refresh_token(
+        user_id=user.id,
+        phone_number=user.phone_number,
+        name=user.full_name,
+    )
+
+    return TokenRefreshResponse(
+        success=True,
+        token=new_access,
+        refresh_token=new_refresh,
+        message="Token refreshed successfully.",
     )
 
 @auth_router.post("/signout")

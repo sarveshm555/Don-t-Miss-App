@@ -6,9 +6,10 @@ Enforces strict idempotency and avoids blocking FastAPI request handling.
 """
 
 import os
+import calendar
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
@@ -135,22 +136,24 @@ class ReminderScheduler:
                 )
 
                 if dispatch_res.get("success"):
+                    sid_val = dispatch_res.get("sid") or dispatch_res.get("message_sid")
                     channel_entry.status = "DISPATCHED"
                     channel_entry.dispatched_at = now
                     history = ActionHistory(
                         user_id=user.id,
                         reminder_id=reminder.id,
                         action_type="DISPATCH_WHATSAPP",
-                        details=f"Sent to {user.phone_number}. SID: {dispatch_res.get('sid')}",
+                        details=f"Sent to {user.phone_number}. SID: {sid_val}",
                         success=True,
                     )
                     db.add(history)
+                    self._schedule_next_occurrence_if_recurring(reminder, user, db, now)
                     db.commit()
                     results.append({
                         "reminder_id": reminder.id,
                         "status": "DISPATCHED",
                         "success": True,
-                        "sid": dispatch_res.get("sid"),
+                        "sid": sid_val,
                     })
                 else:
                     channel_entry.status = "FAILED"
@@ -178,16 +181,66 @@ class ReminderScheduler:
 
         return results
 
+    def _schedule_next_occurrence_if_recurring(
+        self,
+        reminder: Reminder,
+        user: User,
+        db: Session,
+        now_utc: datetime,
+    ) -> None:
+        """Advance recurring reminder due date and queue next PENDING WhatsApp channel."""
+        rec = (getattr(reminder, "recurrence", None) or "none").lower().strip()
+        if rec not in ("daily", "weekly", "monthly") or not reminder.due_date:
+            return
+
+        tz_name = (
+            getattr(reminder, "timezone", None)
+            or getattr(user, "timezone", None)
+            or "Asia/Kolkata"
+        )
+        next_date = reminder.due_date
+        for _ in range(366):
+            if rec == "daily":
+                next_date = next_date + timedelta(days=1)
+            elif rec == "weekly":
+                next_date = next_date + timedelta(days=7)
+            else:
+                next_month = 1 if next_date.month == 12 else next_date.month + 1
+                next_year = next_date.year + 1 if next_date.month == 12 else next_date.year
+                max_day = calendar.monthrange(next_year, next_month)[1]
+                next_date = date(next_year, next_month, min(reminder.due_date.day, max_day))
+
+            candidate_utc = reminder_due_to_utc(
+                due_date=next_date,
+                due_hour=reminder.due_hour,
+                due_minute=reminder.due_minute,
+                tz_name=tz_name,
+            )
+            if candidate_utc and candidate_utc > now_utc:
+                reminder.due_date = next_date
+                reminder.due_timestamp_utc = candidate_utc
+                db.add(
+                    ReminderChannel(
+                        reminder_id=reminder.id,
+                        channel="whatsapp",
+                        status="PENDING",
+                    )
+                )
+                return
+
+    def _execute_tick_sync(self):
+        session = next(get_db_session())
+        try:
+            self.process_due_reminders(session)
+        finally:
+            session.close()
+
     async def _run_loop(self):
-        """Asynchronous background loop that polls for due reminders."""
+        """Asynchronous background loop that polls for due reminders off the event loop."""
         logger.info("ReminderScheduler background loop started.")
         while self.is_running:
             try:
-                session = next(get_db_session())
-                try:
-                    self.process_due_reminders(session)
-                finally:
-                    session.close()
+                await asyncio.to_thread(self._execute_tick_sync)
             except Exception as e:
                 logger.error("Unexpected error in reminder scheduler tick: %s", e)
 

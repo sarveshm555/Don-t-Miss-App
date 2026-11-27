@@ -7,6 +7,7 @@ expiration handling, and Supabase PostgreSQL persistence.
 
 import os
 import json
+import inspect
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Set
@@ -22,6 +23,7 @@ from agent.services.reminder_persistence import (
     format_proposed_time,
 )
 from agent.routes.auth_routes import normalize_phone_number
+from agent.services.timezone_service import resolve_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +247,24 @@ async def handle_twilio_whatsapp_webhook(
     db.commit()
 
     agent = get_reminder_agent()
-    agent_response = await agent.process_prompt_async(prompt=raw_body)
+    user_tz = getattr(user, "timezone", None) or "Asia/Kolkata"
+    tz_info = resolve_timezone(user_tz)
+    local_now = datetime.now(tz_info)
+    call_kwargs = {
+        "prompt": raw_body,
+        "current_date": local_now.strftime("%Y-%m-%d"),
+        "current_time": local_now.strftime("%H:%M"),
+    }
+    try:
+        sig = inspect.signature(agent.process_prompt_async)
+        has_var_kw = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if has_var_kw or "timezone" in sig.parameters:
+            call_kwargs["timezone"] = user_tz
+    except (TypeError, ValueError):
+        pass
+    agent_response = await agent.process_prompt_async(**call_kwargs)
 
     if agent_response.success and agent_response.proposal and agent_response.proposal.draft:
         draft = agent_response.proposal.draft
