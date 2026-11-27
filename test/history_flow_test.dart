@@ -73,6 +73,16 @@ class FakeAuthService implements AuthService {
   Future<bool> verifyPhone({required String phoneNumber, required String code}) async => true;
 
   @override
+  String? get currentToken => user != null ? 'fake-jwt-token' : null;
+
+  @override
+  String? get currentRefreshToken =>
+      user != null ? 'fake-refresh-token' : null;
+
+  @override
+  Future<String?> refreshSession() async => currentToken;
+
+  @override
   Future<void> signOut() async {
     user = null;
   }

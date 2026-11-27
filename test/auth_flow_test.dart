@@ -95,6 +95,16 @@ class FakeAuthService implements AuthService {
   }) async => true;
 
   @override
+  String? get currentToken => currentUser != null ? 'fake-jwt-token' : null;
+
+  @override
+  String? get currentRefreshToken =>
+      currentUser != null ? 'fake-refresh-token' : null;
+
+  @override
+  Future<String?> refreshSession() async => currentToken;
+
+  @override
   Future<void> signOut() async {
     currentUser = null;
   }

@@ -203,6 +203,9 @@ class MockFailingTransport extends Fake implements AgentHttpTransport {
   MockFailingTransport({required this.errorToThrow});
 
   @override
+  bool get supportsMultipart => false;
+
+  @override
   Future<AgentHttpResponse> postJson({
     required Uri uri,
     required Map<String, dynamic> payload,
@@ -217,6 +220,9 @@ class MockFailingTransport extends Fake implements AgentHttpTransport {
 class MockRouteTransport extends Fake implements AgentHttpTransport {
   final Future<AgentHttpResponse> Function(Uri uri, Map<String, dynamic> payload) handler;
   MockRouteTransport(this.handler);
+
+  @override
+  bool get supportsMultipart => false;
 
   @override
   Future<AgentHttpResponse> postJson({
