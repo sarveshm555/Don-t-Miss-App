@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/ai_reminder_draft.dart';
 import 'agent_http_transport.dart';
 import 'ai_agent_api_service.dart';
+import 'auth_service.dart';
 
 /// Result of a multi-reminder batch confirmation request.
 class BatchConfirmResult {
@@ -100,11 +101,32 @@ abstract class ActionDispatchService {
 class BackendActionDispatchService implements ActionDispatchService {
   final String? baseUrl;
   final AgentHttpTransport? transport;
+  final Future<String?> Function()? tokenRefresher;
+  final VoidCallback? onSessionExpired;
 
   const BackendActionDispatchService({
     this.baseUrl,
     this.transport,
+    this.tokenRefresher,
+    this.onSessionExpired,
   });
+
+  Future<String?> _attemptTokenRefresh() async {
+    try {
+      if (tokenRefresher != null) {
+        return await tokenRefresher!();
+      }
+      return await ApiAuthService.shared.refreshSession();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _notifySessionExpired() {
+    try {
+      onSessionExpired?.call();
+    } catch (_) {}
+  }
 
   String get effectiveBaseUrl =>
       baseUrl ?? StrandsAgentApiService.defaultBaseUrl;
@@ -120,9 +142,13 @@ class BackendActionDispatchService implements ActionDispatchService {
     String? authToken,
     String? reminderId,
   }) async {
+    final tzName = await StrandsAgentApiService.resolveDeviceTimezone();
     final payload = {
       'action': 'confirm_reminder',
-      'draft': draft.toJson(),
+      'draft': {
+        ...draft.toJson(),
+        'timezone': tzName,
+      },
       'user_phone_number': userPhoneNumber,
       if (userId != null) 'user_id': userId,
       if (reminderId != null) 'reminder_id': reminderId,
@@ -139,13 +165,30 @@ class BackendActionDispatchService implements ActionDispatchService {
       final response = await effectiveTransport.postJson(
         uri: uri,
         payload: payload,
-        timeout: const Duration(seconds: 15),
+        timeout: const Duration(seconds: 60),
         headers: headers,
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return data['success'] as bool? ?? false;
+      } else if (response.statusCode == 401) {
+        final newToken = await _attemptTokenRefresh();
+        if (newToken != null && newToken.isNotEmpty) {
+          final retryHeaders = Map<String, String>.from(headers);
+          retryHeaders['Authorization'] = 'Bearer $newToken';
+          final retryRes = await effectiveTransport.postJson(
+            uri: uri,
+            payload: payload,
+            timeout: const Duration(seconds: 60),
+            headers: retryHeaders,
+          );
+          if (retryRes.statusCode == 200) {
+            final data = jsonDecode(retryRes.body) as Map<String, dynamic>;
+            return data['success'] as bool? ?? false;
+          }
+        }
+        _notifySessionExpired();
       }
       return false;
     } catch (e) {
@@ -160,9 +203,19 @@ class BackendActionDispatchService implements ActionDispatchService {
     required List<AiReminderDraft> drafts,
     String? idempotencyKey,
     String? authToken,
+    String? timezone,
   }) async {
+    final tzName = (timezone != null && timezone.trim().isNotEmpty)
+        ? timezone.trim()
+        : await StrandsAgentApiService.resolveDeviceTimezone();
     final payload = {
-      'reminders': drafts.map((d) => d.toJson()).toList(),
+      'reminders': drafts
+          .map((d) => {
+                ...d.toJson(),
+                'timezone': tzName,
+              })
+          .toList(),
+      'timezone': tzName,
       if (idempotencyKey != null) 'idempotency_key': idempotencyKey,
     };
 
@@ -180,13 +233,31 @@ class BackendActionDispatchService implements ActionDispatchService {
       final response = await effectiveTransport.postJson(
         uri: uri,
         payload: payload,
-        timeout: const Duration(seconds: 30),
+        timeout: const Duration(seconds: 60),
         headers: headers,
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         return BatchConfirmResult.fromJson(data);
+      } else if (response.statusCode == 401) {
+        final newToken = await _attemptTokenRefresh();
+        if (newToken != null && newToken.isNotEmpty) {
+          final retryHeaders = Map<String, String>.from(headers);
+          retryHeaders['Authorization'] = 'Bearer $newToken';
+          final retryRes = await effectiveTransport.postJson(
+            uri: uri,
+            payload: payload,
+            timeout: const Duration(seconds: 60),
+            headers: retryHeaders,
+          );
+          if (retryRes.statusCode == 200) {
+            final data = jsonDecode(retryRes.body) as Map<String, dynamic>;
+            return BatchConfirmResult.fromJson(data);
+          }
+        }
+        _notifySessionExpired();
+        return BatchConfirmResult.failure('Authentication session expired. Please sign in again.');
       } else {
         String? detail;
         try {

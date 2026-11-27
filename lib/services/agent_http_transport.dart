@@ -3,6 +3,8 @@ import 'agent_http_transport_stub.dart'
     if (dart.library.html) 'agent_http_transport_html.dart';
 
 abstract class AgentHttpTransport {
+  bool get supportsMultipart => false;
+
   Future<AgentHttpResponse> postJson({
     required Uri uri,
     required Map<String, dynamic> payload,
@@ -10,6 +12,20 @@ abstract class AgentHttpTransport {
     Map<String, String>? headers,
     dynamic clientFactory,
   });
+
+  Future<AgentHttpResponse> postMultipart({
+    required Uri uri,
+    required String fieldName,
+    required List<int> fileBytes,
+    required String filename,
+    String contentType = 'application/octet-stream',
+    Map<String, String>? fields,
+    Map<String, String>? headers,
+    required Duration timeout,
+    dynamic clientFactory,
+  }) {
+    throw UnimplementedError('postMultipart not implemented');
+  }
 
   Future<AgentHttpResponse> get({
     required Uri uri,

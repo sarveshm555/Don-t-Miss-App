@@ -28,6 +28,11 @@ class TaskProvider extends ChangeNotifier {
   String _searchQuery = '';
   TaskFilter _selectedFilter = TaskFilter.all;
   String? Function()? _authTokenProvider;
+  Future<String?> Function()? _tokenRefresher;
+  VoidCallback? _onSessionExpired;
+  String? _boundUserId;
+  bool _wasAuthenticated = false;
+  bool _hasSyncedForBoundUser = false;
 
   TaskProvider({
     TaskRepository? repository,
@@ -35,12 +40,29 @@ class TaskProvider extends ChangeNotifier {
     DateTime Function()? clock,
     ReminderSyncService? syncService,
     String? Function()? authTokenProvider,
+    Future<String?> Function()? tokenRefresher,
+    VoidCallback? onSessionExpired,
   })  : _repository = repository ?? LocalTaskRepository(),
         _notificationService = notificationService ?? NotificationService.instance,
         _clock = clock ?? DateTime.now,
-        _syncService = syncService ?? ReminderSyncService(),
-        _authTokenProvider = authTokenProvider {
+        _authTokenProvider = authTokenProvider,
+        _tokenRefresher = tokenRefresher,
+        _onSessionExpired = onSessionExpired,
+        _syncService = syncService {
+    _effectiveSyncService = _syncService;
     loadTasks();
+  }
+
+  ReminderSyncService? _effectiveSyncService;
+
+  ReminderSyncService? get _activeSyncService {
+    if (_effectiveSyncService != null) return _effectiveSyncService;
+    if (_syncService != null) return _syncService;
+    _effectiveSyncService = ReminderSyncService(
+      tokenRefresher: () async => await _tokenRefresher?.call(),
+      onSessionExpired: () => _onSessionExpired?.call(),
+    );
+    return _effectiveSyncService;
   }
 
   // Getters
@@ -133,12 +155,52 @@ class TaskProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Binds an [AuthProvider] to enable automatic JWT cloud synchronization.
+  /// Binds an [AuthProvider] to enable automatic JWT cloud synchronization
+  /// and strictly isolate reminder caches across account sign-out / switches.
   void bindAuth(AuthProvider auth) {
     _authTokenProvider = () => auth.token;
-    if (auth.isAuthenticated && auth.token != null) {
+    _tokenRefresher = auth.refreshSession;
+    _onSessionExpired = auth.handleSessionExpired;
+
+    if (auth.isLoading) {
+      return;
+    }
+
+    final currentUserId = auth.currentUser?.id;
+    final loggedOut = _wasAuthenticated && !auth.isAuthenticated;
+    final switchedUser = _boundUserId != null &&
+        currentUserId != null &&
+        currentUserId.isNotEmpty &&
+        currentUserId != _boundUserId;
+
+    if (loggedOut || switchedUser) {
+      _hasSyncedForBoundUser = false;
+      _resetLocalAccountData();
+    }
+
+    _wasAuthenticated = auth.isAuthenticated;
+    _boundUserId = currentUserId;
+
+    if (auth.isAuthenticated && auth.token != null && !_hasSyncedForBoundUser) {
+      _hasSyncedForBoundUser = true;
       syncWithCloud();
     }
+  }
+
+  Future<void> _resetLocalAccountData() async {
+    _tasks = [];
+    _searchQuery = '';
+    _selectedFilter = TaskFilter.all;
+    notifyListeners();
+    try {
+      await _repository.saveAllTasks([]);
+    } catch (_) {}
+    try {
+      await _activeSyncService?.clearAllDeletedIds();
+    } catch (_) {}
+    try {
+      await _notificationService.cancelAllNotifications();
+    } catch (_) {}
   }
 
   /// Configures an explicit auth token provider function.
@@ -146,20 +208,47 @@ class TaskProvider extends ChangeNotifier {
     _authTokenProvider = provider;
   }
 
+  /// Reconciles device local notifications to match the merged task list after sync.
+  Future<void> _reconcileNotifications(
+    List<Task> previousTasks,
+    List<Task> mergedTasks,
+  ) async {
+    final mergedMap = {for (final t in mergedTasks) t.id: t};
+    for (final oldTask in previousTasks) {
+      if (!mergedMap.containsKey(oldTask.id)) {
+        try {
+          await _notificationService.cancelTaskNotification(oldTask.notificationId);
+        } catch (_) {}
+      }
+    }
+    for (final task in mergedTasks) {
+      try {
+        if (task.isCompleted || !task.isNotificationEnabled) {
+          await _notificationService.cancelTaskNotification(task.notificationId);
+        } else {
+          await _notificationService.scheduleTaskNotification(task);
+        }
+      } catch (_) {}
+    }
+  }
+
   /// Synchronizes local tasks with cloud backend using the authenticated JWT session.
   Future<SyncResult?> syncWithCloud() async {
     final token = _authTokenProvider?.call();
-    if (token == null || token.isEmpty || _syncService == null) return null;
+    final syncService = _activeSyncService;
+    if (token == null || token.isEmpty || syncService == null) return null;
 
     _isSyncing = true;
     notifyListeners();
 
     try {
-      final result = await _syncService!.sync(_tasks, token);
+      final previousTasks = List<Task>.from(_tasks);
+      final result = await syncService.sync(_tasks, token);
       if (result.success) {
         _tasks = result.mergedTasks;
         _sortTasks();
         await _repository.saveAllTasks(_tasks);
+        await _reconcileNotifications(previousTasks, _tasks);
       }
       return result;
     } catch (_) {
@@ -200,9 +289,10 @@ class TaskProvider extends ChangeNotifier {
     }
 
     final token = _authTokenProvider?.call();
-    if (token != null && token.isNotEmpty && _syncService != null) {
+    final syncService = _activeSyncService;
+    if (token != null && token.isNotEmpty && syncService != null) {
       try {
-        await _syncService!.createCloudReminder(task, token);
+        await syncService.createCloudReminder(task, token);
       } catch (_) {
         // Safe offline-first: Keep local reminder on cloud failure
       }
@@ -256,9 +346,10 @@ class TaskProvider extends ChangeNotifier {
     }
 
     final token = _authTokenProvider?.call();
-    if (token != null && token.isNotEmpty && _syncService != null) {
+    final syncService = _activeSyncService;
+    if (token != null && token.isNotEmpty && syncService != null) {
       try {
-        await _syncService!.updateCloudReminder(taskWithTimestamp, token);
+        await syncService.updateCloudReminder(taskWithTimestamp, token);
       } catch (_) {
         // Safe offline-first: Keep local reminder on cloud failure
       }
@@ -276,15 +367,16 @@ class TaskProvider extends ChangeNotifier {
     await _repository.saveAllTasks(_tasks);
     await _notificationService.cancelTaskNotification(removedTask.notificationId);
 
+    final syncService = _activeSyncService;
     // Record local deletion tombstone for safe offline propagation
-    await _syncService?.recordLocalDeletion(taskId);
+    await syncService?.recordLocalDeletion(taskId);
 
     final token = _authTokenProvider?.call();
-    if (token != null && token.isNotEmpty && _syncService != null) {
+    if (token != null && token.isNotEmpty && syncService != null) {
       try {
-        final ok = await _syncService!.deleteCloudReminder(taskId, token);
+        final ok = await syncService.deleteCloudReminder(taskId, token);
         if (ok) {
-          await _syncService!.clearLocalDeletion(taskId);
+          await syncService.clearLocalDeletion(taskId);
         }
       } catch (_) {
         // Safe offline-first: tombstone preserved for subsequent sync
@@ -322,9 +414,10 @@ class TaskProvider extends ChangeNotifier {
     }
 
     final token = _authTokenProvider?.call();
-    if (token != null && token.isNotEmpty && _syncService != null) {
+    final syncService = _activeSyncService;
+    if (token != null && token.isNotEmpty && syncService != null) {
       try {
-        await _syncService!.updateCloudReminder(updatedTask, token);
+        await syncService.updateCloudReminder(updatedTask, token);
       } catch (_) {
         // Safe offline-first: Keep local status on cloud failure
       }

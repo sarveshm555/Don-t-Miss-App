@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'voice_recording_platform.dart';
 
@@ -24,31 +25,52 @@ class IoVoiceRecordingPlatformHelper implements VoiceRecordingPlatformHelper {
 
   @override
   Future<String> prepareRecordingPath(String extension) async {
-    final tempDir = Directory.systemTemp;
+    Directory tempDir;
+    try {
+      // On Android, Directory.systemTemp points to /data/local/tmp (unwritable).
+      // Use app-private temporary cache via path_provider.
+      tempDir = await getTemporaryDirectory();
+    } catch (_) {
+      // Fallback for pure-Dart unit test environments without platform channels
+      tempDir = Directory.systemTemp;
+    }
+    if (!await tempDir.exists()) {
+      await tempDir.create(recursive: true);
+    }
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final file = File('${tempDir.path}/dont_miss_rec_$timestamp.$extension');
-    return file.path;
+    final cleanExt = extension.trim().isEmpty ? 'm4a' : extension.trim();
+    final sep = Platform.pathSeparator;
+    final base = tempDir.path.endsWith(sep)
+        ? tempDir.path.substring(0, tempDir.path.length - 1)
+        : tempDir.path;
+    return '$base${sep}dont_miss_rec_$timestamp.$cleanExt';
   }
 
   @override
   Future<List<int>?> readAndCleanupBytes(String path) async {
     if (path.isEmpty) return null;
+    final file = File(path);
     try {
-      final file = File(path);
       if (!await file.exists()) {
         debugPrint('Recorded audio file not found at $path');
         return null;
       }
       final bytes = await file.readAsBytes();
-      try {
-        await file.delete();
-      } catch (e) {
-        debugPrint('Could not delete temporary audio file: $e');
+      if (bytes.isEmpty) {
+        return null;
       }
       return bytes;
     } catch (e) {
       debugPrint('Error reading recorded audio file: $e');
-      return null;
+      rethrow;
+    } finally {
+      try {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (e) {
+        debugPrint('Could not delete temporary audio file: $e');
+      }
     }
   }
 

@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/priority.dart';
 import '../models/recurrence.dart';
 import '../models/task.dart';
 import 'agent_http_transport.dart';
 import 'ai_agent_api_service.dart';
+import 'auth_service.dart';
 
 class SyncException implements Exception {
   final String message;
@@ -39,15 +41,36 @@ class SyncResult {
 /// between local SharedPreferences storage and Supabase PostgreSQL via FastAPI.
 class ReminderSyncService {
   static const String _deletedIdsKey = 'dont_miss_deleted_task_ids_v1';
-  static const Duration _defaultTimeout = Duration(seconds: 15);
+  static const Duration _defaultTimeout = Duration(seconds: 60);
 
   final String? baseUrl;
   final AgentHttpTransport? transport;
+  final Future<String?> Function()? tokenRefresher;
+  final VoidCallback? onSessionExpired;
 
   ReminderSyncService({
     this.baseUrl,
     this.transport,
+    this.tokenRefresher,
+    this.onSessionExpired,
   });
+
+  Future<String?> _attemptTokenRefresh() async {
+    try {
+      if (tokenRefresher != null) {
+        return await tokenRefresher!();
+      }
+      return await ApiAuthService.shared.refreshSession();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _notifySessionExpired() {
+    try {
+      onSessionExpired?.call();
+    } catch (_) {}
+  }
 
   String get effectiveBaseUrl =>
       baseUrl ?? StrandsAgentApiService.defaultBaseUrl;
@@ -123,7 +146,7 @@ class ReminderSyncService {
   }
 
   /// Convert a Flutter [Task] model into a JSON payload for the cloud API.
-  static Map<String, dynamic> taskToCloudPayload(Task task) {
+  static Map<String, dynamic> taskToCloudPayload(Task task, {String? timezone}) {
     final year = task.dueDate.year.toString().padLeft(4, '0');
     final month = task.dueDate.month.toString().padLeft(2, '0');
     final day = task.dueDate.day.toString().padLeft(2, '0');
@@ -135,6 +158,9 @@ class ReminderSyncService {
       'due_date': '$year-$month-$day',
       'due_hour': task.dueHour,
       'due_minute': task.dueMinute,
+      'timezone': (timezone != null && timezone.trim().isNotEmpty)
+          ? timezone.trim()
+          : StrandsAgentApiService.cachedDeviceTimezone,
       'priority': task.priority.name,
       'recurrence': task.recurrence.name,
       'url': task.url,
@@ -145,7 +171,7 @@ class ReminderSyncService {
   }
 
   /// Retrieve cloud reminders belonging strictly to the authenticated user.
-  Future<List<Task>> fetchCloudReminders(String authToken) async {
+  Future<List<Task>> fetchCloudReminders(String authToken, {bool isRetry = false}) async {
     final uri = Uri.parse('$effectiveBaseUrl/reminders');
     final response = await effectiveTransport.get(
       uri: uri,
@@ -161,6 +187,13 @@ class ReminderSyncService {
           .map((item) => parseCloudReminder(item as Map<String, dynamic>))
           .toList();
     } else if (response.statusCode == 401) {
+      if (!isRetry) {
+        final newToken = await _attemptTokenRefresh();
+        if (newToken != null && newToken.isNotEmpty) {
+          return fetchCloudReminders(newToken, isRetry: true);
+        }
+      }
+      _notifySessionExpired();
       throw const SyncException('Authentication session expired.', 401);
     } else {
       throw SyncException(
@@ -171,7 +204,8 @@ class ReminderSyncService {
   }
 
   /// Upload a local reminder to the cloud backend.
-  Future<Task?> createCloudReminder(Task task, String authToken) async {
+  Future<Task?> createCloudReminder(Task task, String authToken, {bool isRetry = false}) async {
+    await StrandsAgentApiService.resolveDeviceTimezone();
     final uri = Uri.parse('$effectiveBaseUrl/reminders');
     final payload = taskToCloudPayload(task);
 
@@ -188,6 +222,13 @@ class ReminderSyncService {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       return parseCloudReminder(data);
     } else if (response.statusCode == 401) {
+      if (!isRetry) {
+        final newToken = await _attemptTokenRefresh();
+        if (newToken != null && newToken.isNotEmpty) {
+          return createCloudReminder(task, newToken, isRetry: true);
+        }
+      }
+      _notifySessionExpired();
       throw const SyncException('Authentication session expired.', 401);
     } else {
       throw SyncException(
@@ -198,7 +239,8 @@ class ReminderSyncService {
   }
 
   /// Update an existing cloud reminder.
-  Future<Task?> updateCloudReminder(Task task, String authToken) async {
+  Future<Task?> updateCloudReminder(Task task, String authToken, {bool isRetry = false}) async {
+    await StrandsAgentApiService.resolveDeviceTimezone();
     final uri = Uri.parse('$effectiveBaseUrl/reminders/${task.id}');
     final payload = taskToCloudPayload(task);
 
@@ -215,10 +257,17 @@ class ReminderSyncService {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       return parseCloudReminder(data);
     } else if (response.statusCode == 401) {
+      if (!isRetry) {
+        final newToken = await _attemptTokenRefresh();
+        if (newToken != null && newToken.isNotEmpty) {
+          return updateCloudReminder(task, newToken, isRetry: true);
+        }
+      }
+      _notifySessionExpired();
       throw const SyncException('Authentication session expired.', 401);
     } else if (response.statusCode == 404) {
       // Cloud record missing; recreate it
-      return createCloudReminder(task, authToken);
+      return createCloudReminder(task, authToken, isRetry: isRetry);
     } else {
       throw SyncException(
         'Failed to update reminder (${response.statusCode}): ${response.body}',
@@ -228,7 +277,7 @@ class ReminderSyncService {
   }
 
   /// Delete a reminder from the cloud backend.
-  Future<bool> deleteCloudReminder(String taskId, String authToken) async {
+  Future<bool> deleteCloudReminder(String taskId, String authToken, {bool isRetry = false}) async {
     final uri = Uri.parse('$effectiveBaseUrl/reminders/$taskId');
     final response = await effectiveTransport.delete(
       uri: uri,
@@ -241,6 +290,13 @@ class ReminderSyncService {
     if (response.statusCode == 200 || response.statusCode == 404) {
       return true;
     } else if (response.statusCode == 401) {
+      if (!isRetry) {
+        final newToken = await _attemptTokenRefresh();
+        if (newToken != null && newToken.isNotEmpty) {
+          return deleteCloudReminder(taskId, newToken, isRetry: true);
+        }
+      }
+      _notifySessionExpired();
       throw const SyncException('Authentication session expired.', 401);
     } else {
       throw SyncException(
@@ -285,6 +341,14 @@ class ReminderSyncService {
     }
   }
 
+  /// Clear all recorded local deletion tombstones (e.g. during account sign-out).
+  Future<void> clearAllDeletedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_deletedIdsKey);
+    } catch (_) {}
+  }
+
   /// Execute a two-way synchronization between local tasks and cloud backend.
   /// 
   /// Strategy:
@@ -296,6 +360,7 @@ class ReminderSyncService {
   /// 5. If a reminder exists only locally, upload it to cloud.
   /// 6. On network or server failure, return original local tasks unmodified.
   Future<SyncResult> sync(List<Task> localTasks, String authToken) async {
+    await StrandsAgentApiService.resolveDeviceTimezone();
     int uploaded = 0;
     int downloaded = 0;
     int updated = 0;

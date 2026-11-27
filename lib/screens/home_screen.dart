@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 import '../core/constants/app_colors.dart';
 import '../models/ai_reminder_draft.dart';
 import '../models/task.dart';
@@ -8,6 +10,7 @@ import '../providers/auth_provider.dart';
 import '../providers/task_provider.dart';
 import '../services/action_dispatch_service.dart';
 import '../services/ai_reminder_service.dart';
+import '../services/notification_service.dart';
 import '../widgets/ai_confirmation_sheet.dart';
 import '../widgets/desktop/desktop_ai_centerpiece.dart';
 import '../widgets/desktop/desktop_sidebar.dart';
@@ -44,6 +47,9 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _searchController = TextEditingController();
+    if (!kIsWeb) {
+      NotificationService.instance.requestPermissions();
+    }
   }
 
   @override
@@ -60,13 +66,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _handleConfirmAiDraft(
       BuildContext context, AiReminderDraft draft, TaskProvider provider) async {
     final auth = context.read<AuthProvider>();
-    final task = draft.toTask();
+    final draftWithId = (draft.id != null && draft.id!.isNotEmpty)
+        ? draft
+        : draft.copyWith(id: const Uuid().v4());
+    final task = draftWithId.toTask();
     await provider.addTask(task);
 
     if (widget.actionDispatchService != null) {
       try {
         await widget.actionDispatchService!.dispatchConfirmedAction(
-          draft: draft,
+          draft: draftWithId,
           reminderId: task.id,
           userId: auth.currentUser?.id,
           userPhoneNumber: auth.currentUser?.phoneNumber,
@@ -89,24 +98,39 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _handleConfirmAiBatchDrafts(BuildContext context,
       List<AiReminderDraft> drafts, TaskProvider provider) async {
     final auth = context.read<AuthProvider>();
-    final tasks = drafts.map((d) => d.toTask()).toList();
+    final draftsWithIds = drafts
+        .map((d) => (d.id != null && d.id!.isNotEmpty)
+            ? d
+            : d.copyWith(id: const Uuid().v4()))
+        .toList();
+    final tasks = draftsWithIds.map((d) => d.toTask()).toList();
     await provider.addTasksBatch(tasks);
 
-    if (widget.actionDispatchService != null && auth.token != null) {
+    BatchConfirmResult? batchResult;
+    if (widget.actionDispatchService != null &&
+        auth.token != null &&
+        auth.token!.isNotEmpty) {
       try {
-        await widget.actionDispatchService!.dispatchBatchConfirmedActions(
-          drafts: drafts,
+        batchResult =
+            await widget.actionDispatchService!.dispatchBatchConfirmedActions(
+          drafts: draftsWithIds,
+          idempotencyKey: const Uuid().v4(),
           authToken: auth.token!,
         );
       } catch (_) {}
     }
 
     if (context.mounted) {
+      final cloudSynced =
+          batchResult != null && batchResult.success && batchResult.totalCreated > 0;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-              '${tasks.length} reminders confirmed & scheduled successfully.'),
-          backgroundColor: AppColors.primary,
+            cloudSynced
+                ? '${tasks.length} reminders confirmed & synced to cloud.'
+                : '${tasks.length} reminders confirmed & scheduled locally.',
+          ),
+          backgroundColor: cloudSynced ? AppColors.primary : AppColors.warning,
           behavior: SnackBarBehavior.floating,
         ),
       );

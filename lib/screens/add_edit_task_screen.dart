@@ -250,7 +250,10 @@ class _AddEditTaskScreenState extends State<AddEditTaskScreen> {
               );
 
         final dispatchService = widget.actionDispatchService ??
-            const BackendActionDispatchService();
+            BackendActionDispatchService(
+              tokenRefresher: auth?.refreshSession,
+              onSessionExpired: auth?.handleSessionExpired,
+            );
 
         cloudSuccess = await dispatchService.dispatchConfirmedAction(
           draft: confirmedDraft,

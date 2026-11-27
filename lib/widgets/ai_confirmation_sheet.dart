@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 import '../core/constants/app_colors.dart';
 import '../core/utils/date_time_utils.dart';
 import '../models/ai_reminder_draft.dart';
@@ -144,6 +145,14 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
         _voiceState = VoiceState.recording;
         _recordingDuration = Duration.zero;
       });
+    } on VoiceRecordingException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _voiceState = VoiceState.error;
+          _errorMessage = e.message;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -207,14 +216,28 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
         _isProcessing = false;
         _voiceState = VoiceState.transcriptionReady;
       });
+    } on VoiceRecordingException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _voiceState = VoiceState.error;
+          _errorMessage = e.message;
+        });
+      }
+    } on AiParsingException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _voiceState = VoiceState.error;
+          _errorMessage = e.message;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isProcessing = false;
           _voiceState = VoiceState.error;
-          _errorMessage = e is AiParsingException
-              ? e.message
-              : 'Voice transcription error: $e';
+          _errorMessage = 'Voice transcription error: $e';
         });
       }
     }
@@ -276,7 +299,10 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
       _isConfirming = true;
     });
 
-    final task = draft.toTask();
+    final draftWithId = (draft.id != null && draft.id!.isNotEmpty)
+        ? draft
+        : draft.copyWith(id: const Uuid().v4());
+    final task = draftWithId.toTask();
     final provider = Provider.of<TaskProvider>(context, listen: false);
 
     AuthProvider? auth;
@@ -292,10 +318,13 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
 
     // 2. Cloud persistence and action dispatch
     final dispatchService = widget.actionDispatchService ??
-        const BackendActionDispatchService();
+        BackendActionDispatchService(
+          tokenRefresher: auth?.refreshSession,
+          onSessionExpired: auth?.handleSessionExpired,
+        );
 
     final cloudSuccess = await dispatchService.dispatchConfirmedAction(
-      draft: draft,
+      draft: draftWithId,
       reminderId: task.id,
       userId: currentUser?.id,
       userPhoneNumber: currentUser?.phoneNumber,
@@ -358,7 +387,13 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
             _selectedDraftIds.contains(d.draftId) ||
             (d.id != null && _selectedDraftIds.contains(d.id)))
         .toList();
-    final tasks = selectedDrafts.map((d) => d.toTask()).toList();
+    // Unify client UUIDs across local storage and cloud DB before dispatch
+    final draftsWithIds = selectedDrafts
+        .map((d) => (d.id != null && d.id!.isNotEmpty)
+            ? d
+            : d.copyWith(id: const Uuid().v4()))
+        .toList();
+    final tasks = draftsWithIds.map((d) => d.toTask()).toList();
     final provider = Provider.of<TaskProvider>(context, listen: false);
 
     AuthProvider? auth;
@@ -371,15 +406,19 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
     // 1. Local batch persistence & notification scheduling
     await provider.addTasksBatch(tasks);
 
-    // 2. Cloud persistence
+    // 2. Cloud persistence with unified IDs and explicit Idempotency-Key
     final dispatchService = widget.actionDispatchService ??
-        const BackendActionDispatchService();
+        BackendActionDispatchService(
+          tokenRefresher: auth?.refreshSession,
+          onSessionExpired: auth?.handleSessionExpired,
+        );
 
     BatchConfirmResult? batchResult;
     if (authToken != null && authToken.isNotEmpty) {
       try {
         batchResult = await dispatchService.dispatchBatchConfirmedActions(
-          drafts: selectedDrafts,
+          drafts: draftsWithIds,
+          idempotencyKey: const Uuid().v4(),
           authToken: authToken,
         );
       } catch (_) {}
@@ -395,7 +434,11 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
       SnackBar(
         content: Row(
           children: [
-            const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+            Icon(
+              cloudCount > 0 ? Icons.check_circle_rounded : Icons.warning_amber_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -407,7 +450,7 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
             ),
           ],
         ),
-        backgroundColor: AppColors.success,
+        backgroundColor: cloudCount > 0 ? AppColors.success : AppColors.warning,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -943,7 +986,8 @@ class _AiConfirmationSheetState extends State<AiConfirmationSheet> {
 
               // List of extracted reminder cards
               ..._drafts.map((draft) {
-                final isSelected = _selectedDraftIds.contains(draft.id);
+                final isSelected = _selectedDraftIds.contains(draft.draftId) ||
+                    (draft.id != null && _selectedDraftIds.contains(draft.id));
                 return _buildMultiDraftCard(draft, isSelected, isDark);
               }),
 

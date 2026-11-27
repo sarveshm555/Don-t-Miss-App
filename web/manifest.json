@@ -1,11 +1,11 @@
 {
-    "name": "dont_miss",
-    "short_name": "dont_miss",
+    "name": "Don't Miss",
+    "short_name": "Don't Miss",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Don't Miss — AI-Powered Agentic Reminder & Task Assistant.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

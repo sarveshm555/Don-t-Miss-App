@@ -17,6 +17,9 @@ class AuthException implements Exception {
 /// Abstracted so future backend JWT / AWS Cognito / Firebase Auth
 /// can be seamlessly plugged in without modifying UI state.
 abstract class AuthService {
+  String? get currentToken => null;
+  String? get currentRefreshToken => null;
+  Future<String?> refreshSession() async => null;
   Future<UserProfile?> getCurrentUser();
   Future<bool> isAuthenticated();
   Future<UserProfile> signUp({
@@ -39,17 +42,29 @@ abstract class AuthService {
 class ApiAuthService implements AuthService {
   static const String _userKey = 'dont_miss_auth_user_v1';
   static const String _tokenKey = 'dont_miss_auth_token_v1';
+  static const String _refreshTokenKey = 'dont_miss_auth_refresh_token_v1';
+  static const String _tasksCacheKey = 'dont_miss_saved_tasks_v1';
+  static const String _deletedTaskIdsKey = 'dont_miss_deleted_task_ids_v1';
+  static const Duration _authTimeout = Duration(seconds: 60);
+
+  static ApiAuthService? _sharedInstance;
+  static ApiAuthService get shared => _sharedInstance ??= ApiAuthService();
+  static set shared(ApiAuthService instance) => _sharedInstance = instance;
 
   final String? baseUrl;
   final AgentHttpTransport? transport;
 
   String? _cachedToken;
+  String? _cachedRefreshToken;
   UserProfile? _cachedUser;
+  Future<String?>? _ongoingRefresh;
 
   ApiAuthService({
     this.baseUrl,
     this.transport,
-  });
+  }) {
+    _sharedInstance ??= this;
+  }
 
   String get effectiveBaseUrl =>
       baseUrl ?? StrandsAgentApiService.defaultBaseUrl;
@@ -57,7 +72,39 @@ class ApiAuthService implements AuthService {
   AgentHttpTransport get effectiveTransport =>
       transport ?? createAgentHttpTransport();
 
+  @override
   String? get currentToken => _cachedToken;
+
+  @override
+  String? get currentRefreshToken => _cachedRefreshToken;
+
+  /// Checks whether a valid structural JWT string is expired according to its `exp` claim.
+  /// Synthetic non-JSON test tokens return `false` so mocked session tests are unaffected.
+  bool _isJwtExpired(String token) {
+    try {
+      final parts = token.split('.');
+      if (parts.length != 3) return false;
+      final normalized = base64Url.normalize(parts[1]);
+      final decoded = utf8.decode(base64Url.decode(normalized));
+      final payload = jsonDecode(decoded);
+      if (payload is! Map<String, dynamic>) return false;
+      final exp = payload['exp'];
+      if (exp is! int) return false;
+      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      return nowSec >= exp - 30;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _clearStoredSession(SharedPreferences prefs) async {
+    await prefs.remove(_userKey);
+    await prefs.remove(_tokenKey);
+    await prefs.remove(_refreshTokenKey);
+    _cachedUser = null;
+    _cachedToken = null;
+    _cachedRefreshToken = null;
+  }
 
   @override
   Future<UserProfile?> getCurrentUser() async {
@@ -66,8 +113,19 @@ class ApiAuthService implements AuthService {
     final prefs = await SharedPreferences.getInstance();
     final rawUser = prefs.getString(_userKey);
     _cachedToken = prefs.getString(_tokenKey);
+    _cachedRefreshToken = prefs.getString(_refreshTokenKey);
 
     if (rawUser == null || rawUser.isEmpty) return null;
+
+    if (_cachedToken != null &&
+        _cachedToken!.isNotEmpty &&
+        _isJwtExpired(_cachedToken!)) {
+      final refreshed = await refreshSession();
+      if (refreshed == null || refreshed.isEmpty) {
+        await _clearStoredSession(prefs);
+        return null;
+      }
+    }
 
     try {
       final map = jsonDecode(rawUser) as Map<String, dynamic>;
@@ -82,6 +140,54 @@ class ApiAuthService implements AuthService {
   Future<bool> isAuthenticated() async {
     final user = await getCurrentUser();
     return user != null && _cachedToken != null && _cachedToken!.isNotEmpty;
+  }
+
+  @override
+  Future<String?> refreshSession() async {
+    if (_ongoingRefresh != null) {
+      return _ongoingRefresh;
+    }
+    _ongoingRefresh = _executeRefresh();
+    try {
+      return await _ongoingRefresh;
+    } finally {
+      _ongoingRefresh = null;
+    }
+  }
+
+  Future<String?> _executeRefresh() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rToken = _cachedRefreshToken ?? prefs.getString(_refreshTokenKey);
+    if (rToken == null || rToken.isEmpty) {
+      return null;
+    }
+
+    final uri = Uri.parse('$effectiveBaseUrl/auth/refresh');
+    final payload = {'refresh_token': rToken};
+
+    try {
+      final response = await effectiveTransport.postJson(
+        uri: uri,
+        payload: payload,
+        timeout: _authTimeout,
+      );
+
+      final data = _parseResponse(response);
+      if (response.statusCode == 200 && (data['success'] as bool? ?? false)) {
+        final newToken = data['token'] as String?;
+        final newRefreshToken = (data['refresh_token'] as String?) ?? rToken;
+        if (newToken != null && newToken.isNotEmpty) {
+          _cachedToken = newToken;
+          _cachedRefreshToken = newRefreshToken;
+          await prefs.setString(_tokenKey, newToken);
+          await prefs.setString(_refreshTokenKey, newRefreshToken);
+          return newToken;
+        }
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -100,7 +206,7 @@ class ApiAuthService implements AuthService {
     final response = await effectiveTransport.postJson(
       uri: uri,
       payload: payload,
-      timeout: const Duration(seconds: 15),
+      timeout: _authTimeout,
     );
 
     final data = _parseResponse(response);
@@ -113,7 +219,8 @@ class ApiAuthService implements AuthService {
         createdAt: DateTime.now(),
       );
       final token = data['token'] as String?;
-      await _persistSession(user, token);
+      final refreshToken = data['refresh_token'] as String?;
+      await _persistSession(user, token, refreshToken: refreshToken);
       return user;
     }
 
@@ -137,7 +244,7 @@ class ApiAuthService implements AuthService {
     final response = await effectiveTransport.postJson(
       uri: uri,
       payload: payload,
-      timeout: const Duration(seconds: 15),
+      timeout: _authTimeout,
     );
 
     final data = _parseResponse(response);
@@ -150,7 +257,8 @@ class ApiAuthService implements AuthService {
         createdAt: DateTime.now(),
       );
       final token = data['token'] as String?;
-      await _persistSession(user, token);
+      final refreshToken = data['refresh_token'] as String?;
+      await _persistSession(user, token, refreshToken: refreshToken);
       return user;
     }
 
@@ -174,7 +282,7 @@ class ApiAuthService implements AuthService {
     final response = await effectiveTransport.postJson(
       uri: uri,
       payload: payload,
-      timeout: const Duration(seconds: 15),
+      timeout: _authTimeout,
     );
 
     final data = _parseResponse(response);
@@ -192,7 +300,8 @@ class ApiAuthService implements AuthService {
           .copyWith(isVerified: true);
 
       final token = data['token'] as String? ?? _cachedToken;
-      await _persistSession(updated, token);
+      final refreshToken = data['refresh_token'] as String? ?? _cachedRefreshToken;
+      await _persistSession(updated, token, refreshToken: refreshToken);
       return true;
     }
 
@@ -220,20 +329,29 @@ class ApiAuthService implements AuthService {
       // Do not block client signout on network issues
     } finally {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_userKey);
-      await prefs.remove(_tokenKey);
-      _cachedUser = null;
-      _cachedToken = null;
+      await _clearStoredSession(prefs);
+      await prefs.remove(_tasksCacheKey);
+      await prefs.remove(_deletedTaskIdsKey);
     }
   }
 
-  Future<void> _persistSession(UserProfile user, String? token) async {
+  Future<void> _persistSession(
+    UserProfile user,
+    String? token, {
+    String? refreshToken,
+  }) async {
     _cachedUser = user;
     _cachedToken = token;
+    if (refreshToken != null) {
+      _cachedRefreshToken = refreshToken;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_userKey, jsonEncode(user.toJson()));
     if (token != null && token.isNotEmpty) {
       await prefs.setString(_tokenKey, token);
+    }
+    if (_cachedRefreshToken != null && _cachedRefreshToken!.isNotEmpty) {
+      await prefs.setString(_refreshTokenKey, _cachedRefreshToken!);
     }
   }
 
@@ -249,6 +367,15 @@ class ApiAuthService implements AuthService {
 /// Baseline local preference implementation for storing user profile state.
 class LocalAuthService implements AuthService {
   static const String _userKey = 'dont_miss_auth_user_v1';
+
+  @override
+  String? get currentToken => 'local_mock_access_token';
+
+  @override
+  String? get currentRefreshToken => 'local_mock_refresh_token';
+
+  @override
+  Future<String?> refreshSession() async => 'local_mock_access_token';
 
   @override
   Future<UserProfile?> getCurrentUser() async {

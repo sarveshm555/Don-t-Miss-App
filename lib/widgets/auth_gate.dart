@@ -4,6 +4,7 @@ import '../core/constants/app_colors.dart';
 import '../providers/auth_provider.dart';
 import '../screens/home_screen.dart';
 import '../screens/sign_in_screen.dart';
+import '../services/action_dispatch_service.dart';
 import '../services/ai_agent_api_service.dart';
 import '../services/ai_reminder_service.dart';
 
@@ -15,12 +16,12 @@ import '../services/ai_reminder_service.dart';
 /// - [SignInScreen] if the user is unauthenticated
 class AuthGate extends StatelessWidget {
   final AiReminderService? aiService;
+  final ActionDispatchService? actionDispatchService;
 
   const AuthGate({
     super.key,
-    this.aiService = const StrandsAgentApiService(
-      fallbackService: LocalAiReminderService(),
-    ),
+    this.aiService,
+    this.actionDispatchService,
   });
 
   @override
@@ -54,7 +55,21 @@ class AuthGate extends StatelessWidget {
         }
 
         if (auth.isAuthenticated) {
-          return HomeScreen(aiService: aiService);
+          final effectiveAiService = aiService ??
+              StrandsAgentApiService(
+                fallbackService: const LocalAiReminderService(),
+                tokenRefresher: auth.refreshSession,
+                onSessionExpired: auth.handleSessionExpired,
+              );
+          final effectiveDispatchService = actionDispatchService ??
+              BackendActionDispatchService(
+                tokenRefresher: auth.refreshSession,
+                onSessionExpired: auth.handleSessionExpired,
+              );
+          return HomeScreen(
+            aiService: effectiveAiService,
+            actionDispatchService: effectiveDispatchService,
+          );
         }
 
         return const SignInScreen();

@@ -11,7 +11,7 @@ class AuthProvider extends ChangeNotifier {
   String? _errorMessage;
 
   AuthProvider({AuthService? authService})
-      : _authService = authService ?? ApiAuthService() {
+      : _authService = authService ?? ApiAuthService.shared {
     loadUser();
   }
 
@@ -20,9 +20,8 @@ class AuthProvider extends ChangeNotifier {
   bool get isVerified => _currentUser?.isVerified ?? false;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
-  String? get token => _authService is ApiAuthService
-      ? (_authService as ApiAuthService).currentToken
-      : null;
+  String? get token => _authService.currentToken;
+  String? get refreshToken => _authService.currentRefreshToken;
 
   Future<void> loadUser() async {
     _isLoading = true;
@@ -104,6 +103,28 @@ class AuthProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<String?> refreshSession() async {
+    try {
+      final newToken = await _authService.refreshSession();
+      if (newToken != null && newToken.isNotEmpty) {
+        notifyListeners();
+        return newToken;
+      }
+      handleSessionExpired();
+      return null;
+    } catch (_) {
+      handleSessionExpired();
+      return null;
+    }
+  }
+
+  void handleSessionExpired() {
+    _currentUser = null;
+    _errorMessage = 'Session expired. Please sign in again.';
+    _authService.signOut();
+    notifyListeners();
   }
 
   Future<void> signOut() async {

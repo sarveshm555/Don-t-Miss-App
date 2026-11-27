@@ -3,6 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 import 'voice_recording_platform.dart';
 
+/// Descriptive exception thrown when audio recording setup or capture fails.
+class VoiceRecordingException implements Exception {
+  final String message;
+  const VoiceRecordingException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Abstract contract for recording audio input across Android and Web.
 abstract class VoiceRecordingService {
   Future<bool> hasPermission();
@@ -58,7 +67,9 @@ class AppVoiceRecordingService implements VoiceRecordingService {
   Future<void> startRecording() async {
     final permitted = await hasPermission();
     if (!permitted) {
-      throw Exception('Microphone permission not granted');
+      throw const VoiceRecordingException(
+        'Microphone permission is required. Please allow Microphone access in app settings and try again.',
+      );
     }
 
     // Cancel any previous in-flight session safely
@@ -75,7 +86,15 @@ class AppVoiceRecordingService implements VoiceRecordingService {
 
     // Use recorder.start (file/blob mode), which is supported on all Android hardware
     // and Web browsers, rather than startStream which fails on Android WAV.
-    await _recorder.start(config, path: _currentRecordingPath);
+    try {
+      await _recorder.start(config, path: _currentRecordingPath);
+    } catch (e) {
+      await _platformHelper.cleanupPath(_currentRecordingPath);
+      _currentRecordingPath = '';
+      throw VoiceRecordingException(
+        'Unable to start audio recording on this device: $e',
+      );
+    }
 
     _isRecording = true;
     _timer?.cancel();
@@ -103,8 +122,11 @@ class AppVoiceRecordingService implements VoiceRecordingService {
       return bytes;
     } catch (e) {
       debugPrint('Error stopping voice recording: $e');
+      await _platformHelper.cleanupPath(_currentRecordingPath);
       _currentRecordingPath = '';
-      return null;
+      throw VoiceRecordingException(
+        'Could not capture recorded audio ($e). Please check microphone access and storage.',
+      );
     }
   }
 

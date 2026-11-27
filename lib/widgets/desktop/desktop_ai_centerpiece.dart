@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:uuid/uuid.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/utils/date_time_utils.dart';
 import '../../models/ai_reminder_draft.dart';
@@ -38,6 +39,7 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
   bool _ownsVoiceRecorder = false;
 
   bool _isProcessing = false;
+  bool _isTranscribing = false;
   bool _isRecording = false;
   Duration _recordingDuration = Duration.zero;
   StreamSubscription<Duration>? _durationSub;
@@ -103,6 +105,13 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
         _isRecording = true;
         _recordingDuration = Duration.zero;
       });
+    } on VoiceRecordingException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isRecording = false;
+          _errorMessage = e.message;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -134,6 +143,7 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
 
     setState(() {
       _isRecording = false;
+      _isTranscribing = true;
       _isProcessing = true;
       _errorMessage = null;
     });
@@ -143,6 +153,7 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
       if (!mounted) return;
       if (audioBytes == null || audioBytes.isEmpty) {
         setState(() {
+          _isTranscribing = false;
           _isProcessing = false;
           _errorMessage = 'No audio recorded. Please try again.';
         });
@@ -159,11 +170,29 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
       if (!mounted) return;
       setState(() {
         _controller.text = transcribedText;
+        _isTranscribing = false;
         _isProcessing = false;
       });
+    } on VoiceRecordingException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isTranscribing = false;
+          _isProcessing = false;
+          _errorMessage = e.message;
+        });
+      }
+    } on AiParsingException catch (e) {
+      if (mounted) {
+        setState(() {
+          _isTranscribing = false;
+          _isProcessing = false;
+          _errorMessage = e.message;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
+          _isTranscribing = false;
           _isProcessing = false;
           _errorMessage = 'Voice transcription error: $e';
         });
@@ -259,10 +288,16 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
         .toList();
     if (selected.isEmpty) return;
 
+    final draftsWithIds = selected
+        .map((d) => (d.id != null && d.id!.isNotEmpty)
+            ? d
+            : d.copyWith(id: const Uuid().v4()))
+        .toList();
+
     if (widget.onConfirmBatchDrafts != null) {
-      widget.onConfirmBatchDrafts!(selected);
+      widget.onConfirmBatchDrafts!(draftsWithIds);
     } else {
-      for (final draft in selected) {
+      for (final draft in draftsWithIds) {
         widget.onConfirmDraft(draft);
       }
     }
@@ -482,6 +517,45 @@ class _DesktopAiCenterpieceState extends State<DesktopAiCenterpiece> {
                     ],
                   ),
           ),
+
+          // 2b. Transcription Banner (if active)
+          if (_isTranscribing)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: const Row(
+                  children: [
+                    SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Transcribing your audio with AI...',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // 3. Error Banner (if any)
           if (_errorMessage != null)

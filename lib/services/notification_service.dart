@@ -44,8 +44,12 @@ class NotificationService {
     try {
       tz_data.initializeTimeZones();
       try {
-        final timeZoneInfo = await FlutterTimezone.getLocalTimezone();
-        tz.setLocalLocation(tz.getLocation(timeZoneInfo.identifier));
+        final timeZoneInfo = await FlutterTimezone.getLocalTimezone().timeout(
+          const Duration(seconds: 1),
+        );
+        var tzId = timeZoneInfo.identifier.trim();
+        if (tzId == 'Asia/Calcutta') tzId = 'Asia/Kolkata';
+        tz.setLocalLocation(tz.getLocation(tzId));
       } catch (e) {
         developer.log('Could not configure local timezone from device: $e');
         debugPrint('[NotificationService] Timezone auto-detect warning: $e');
@@ -119,16 +123,24 @@ class NotificationService {
     }
   }
 
-  /// Requests notification permission (specifically required for Android 13+ / Tiramisu).
+  /// Requests notification and exact alarm permissions (Android 13+ / 14+).
   Future<bool?> requestPermissions() async {
-    final androidImplementation = _notificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    try {
+      final androidImplementation = _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
 
-    if (androidImplementation != null) {
-      return await androidImplementation.requestNotificationsPermission();
+      if (androidImplementation != null) {
+        final notifGranted = await androidImplementation.requestNotificationsPermission();
+        try {
+          await androidImplementation.requestExactAlarmsPermission();
+        } catch (_) {}
+        return notifGranted;
+      }
+      return false;
+    } catch (_) {
+      return false;
     }
-    return false;
   }
 
   /// Schedules a notification for a task at its designated date and time,

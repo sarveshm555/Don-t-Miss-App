@@ -144,6 +144,33 @@ class _SignInScreenState extends State<SignInScreen> {
             const SizedBox(height: 28),
           ],
 
+          // Display session-expiry notice when redirected from an expired session
+          if (auth.errorMessage != null &&
+              auth.errorMessage!.toLowerCase().contains('expired') &&
+              !_isSubmitting) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, color: AppColors.error, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _formatErrorMessage(auth.errorMessage),
+                      style: const TextStyle(color: AppColors.error, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           // Phone Number Field
           TextFormField(
             key: const Key('sign_in_phone_field'),
